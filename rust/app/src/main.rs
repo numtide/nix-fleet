@@ -1,6 +1,6 @@
-fn main() {
-    let (a, b) = (1, 1);
-    let r = lib::add(a, b);
+use lib::coordinator;
 
-    println!("{a} + {b} = {r}");
+#[tokio::main]
+async fn main() {
+    coordinator::run().await.unwrap();
 }
