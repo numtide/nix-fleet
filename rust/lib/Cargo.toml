@@ -1,0 +1,9 @@
+[package]
+name = "lib"
+edition = "2021"
+license = "CAL-1.0"
+version.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+log = { workspace = true }
