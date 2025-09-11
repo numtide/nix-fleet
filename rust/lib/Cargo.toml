@@ -7,3 +7,6 @@ version.workspace = true
 [dependencies]
 anyhow = { workspace = true }
 log = { workspace = true }
+tokio = { workspace = true }
+
+iroh = { version = "0.91.2", features = ["discovery-local-network"] }
