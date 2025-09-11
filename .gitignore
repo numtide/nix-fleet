@@ -1,0 +1,19 @@
+# generic
+.local
+
+# direnv
+.direnv/
+.env
+.envrc.local
+
+# nix
+result
+result-*
+
+# rust
+target/
+.cargo/
+
+# nixago: ignore-linked-files
+**/treefmt.toml
+treefmt.toml

@@ -1,0 +1,28 @@
+{
+  "editor.defaultFormatter": "ibecker.treefmt-vscode",
+  "direnv.restart.automatic": true,
+  "[nix]": {
+    "editor.defaultFormatter": "jnoortheen.nix-ide",
+    "editor.formatOnSave": true
+  },
+  "nix.enableLanguageServer": true,
+  "nix.serverPath": "nil",
+  "nix.serverSettings": {
+    // settings for 'nil' LSP
+    "nil": {
+      "formatting": {
+        "command": ["treefmt", "--stdin", "neverexists.nix"]
+      }
+    }
+  },
+  "[rust]": {
+    "editor.formatOnSave": true,
+    "editor.defaultFormatter": "rust-lang.rust-analyzer"
+  },
+  "rust-analyzer.interpret.tests": true,
+  "rust-analyzer.cfg.setTest": true,
+
+  // FIXME(upstream): without these treefmt-vscode will look for a config
+  "treefmt.command": "treefmt",
+  "treefmt.config": ""
+}

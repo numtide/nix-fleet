@@ -1,0 +1,12 @@
+[package]
+name = "app"
+edition = "2021"
+license = "CAL-1.0"
+version.workspace = true
+
+[dependencies]
+lib = { path = "../lib" }
+
+anyhow = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
