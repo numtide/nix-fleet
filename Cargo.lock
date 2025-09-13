@@ -157,6 +157,8 @@ dependencies = [
  "clap",
  "lib",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1945,6 +1947,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "better-commands",
+ "clap",
  "data-encoding",
  "iroh",
  "jsonpath-rust",
@@ -1956,6 +1959,7 @@ dependencies = [
  "serde_json",
  "ssh-key",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

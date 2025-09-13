@@ -34,14 +34,25 @@ pub mod util {
     }
 }
 
+pub mod protocols {
+    pub const ALPN_PING_0: &str = "nix-fleet/ping/0";
+    pub const ALPN_ENROLL_AGENT_0: &str = "nix-fleet/enroll-agent/0";
+}
+
 pub mod coordinator {
     use anyhow::Context;
     use iroh::{SecretKey, Watcher};
+    use tokio::io::AsyncReadExt;
+    use tracing::debug;
+    use tracing::info;
+    use tracing::trace;
+    use tracing::warn;
 
     pub async fn run(maybe_secret_key: Option<SecretKey>) -> anyhow::Result<()> {
         // Create an endpoint, it allows creating and accepting
         // connections in the iroh p2p world
         let endpoint = iroh::Endpoint::builder()
+            .alpns(vec![crate::protocols::ALPN_PING_0.as_bytes().to_vec()])
             .secret_key(maybe_secret_key.unwrap_or_else(|| SecretKey::generate(rand::rngs::OsRng)))
             .discovery(iroh::discovery::mdns::MdnsDiscoveryBuilder)
             // .discovery_n0()
@@ -50,13 +61,13 @@ pub mod coordinator {
 
         let mut node_addr = endpoint.node_addr();
         let node_id = node_addr.initialized().await.node_id;
-        eprintln!("got node_id {node_id}");
+        debug!("got node_id {node_id}");
 
         loop {
             let incoming = tokio::select! {
                 incoming = endpoint.accept() => incoming,
                 _ = tokio::signal::ctrl_c() => {
-                    eprintln!("got ctrl-c, exiting");
+                    info!("got ctrl-c, exiting");
                     break;
                 }
             };
@@ -71,7 +82,7 @@ pub mod coordinator {
                     // log error at warn level
                     //
                     // we should know about it, but it's not fatal
-                    eprintln!("error handling connection: {}", cause);
+                    warn!("error handling connection: {}", cause);
                 }
             });
         }
@@ -83,18 +94,36 @@ pub mod coordinator {
     async fn handle_endpoint_accept(connecting: iroh::endpoint::Connecting) -> anyhow::Result<()> {
         let connection = connecting.await.context("error accepting connection")?;
         let remote_node_id = &connection.remote_node_id()?;
-        eprintln!("connection from {remote_node_id}");
-        let (_sender, mut reader) = connection
+        debug!("connection from {remote_node_id}");
+
+        let (mut tx, mut rx) = connection
             .accept_bi()
             .await
             .context("error accepting stream")?;
 
-        let mut buf = vec![];
-        let Some(n_bytes) = reader.read(&mut buf).await? else {
-            panic!("got none");
-        };
+        if let Some(alpn) = connection.alpn() {
+            let alpn_str = str::from_utf8(&alpn)?;
+            debug!("received a connection for {alpn_str} from {remote_node_id}");
 
-        eprintln!("read {n_bytes}");
+            let mut receive_buf = String::new();
+            if alpn_str == crate::protocols::ALPN_PING_0 {
+                debug!("processing {alpn_str} request");
+                let received_length = rx
+                    .read_to_string(&mut receive_buf)
+                    .await
+                    .context("reading from stream")?;
+                trace!("read {received_length} bytes: {receive_buf}",);
+                receive_buf.truncate(received_length);
+
+                tx.write_all(receive_buf.as_bytes()).await?;
+                tx.finish()?;
+
+                // Wait until the remote closes the connection, which it does once it received the response.
+                connection.closed().await;
+            } else {
+                anyhow::bail!("unknown ALPN: {alpn_str}")
+            }
+        }
 
         Ok(())
     }
@@ -106,7 +135,7 @@ pub mod agent {
     pub async fn run(maybe_secret_key: Option<SecretKey>) -> anyhow::Result<()> {
         // Create an endpoint, it allows creating and accepting
         // connections in the iroh p2p world
-        let endpoint = iroh::Endpoint::builder()
+        let _endpoint = iroh::Endpoint::builder()
             .secret_key(maybe_secret_key.unwrap_or_else(|| SecretKey::generate(rand::rngs::OsRng)))
             .discovery(iroh::discovery::mdns::MdnsDiscoveryBuilder)
             // .discovery_n0()
@@ -191,7 +220,105 @@ pub mod facts {
     }
 }
 
-pub mod admin {}
+pub mod admin {
+    use anyhow::Context;
+    use iroh::SecretKey;
+    use tokio::{io::AsyncReadExt, time::Instant};
+    use tracing::{info, trace};
+
+    use crate::{admin::cli::AdminArgs, protocols};
+
+    pub mod cli {
+        use clap::{Args, Subcommand};
+        use iroh::PublicKey;
+
+        #[derive(Debug, Clone, Args)]
+        #[command(version, about)]
+        pub struct AdminArgs {
+            #[command(subcommand)]
+            pub cmd: AdminCmd,
+        }
+
+        #[derive(Debug, Clone, Subcommand)]
+        pub enum AdminCmd {
+            /// Sends a message to the node with the PublicKey
+            Ping {
+                /// Number of times the message is sent and expected to come back.
+                #[arg(short, long, default_value_t = 1)]
+                number: usize,
+
+                node_id: PublicKey,
+
+                #[arg(default_value = "ping")]
+                msg: String,
+            },
+        }
+    }
+
+    pub async fn run(
+        maybe_secret_key: Option<SecretKey>,
+        admin_args: AdminArgs,
+    ) -> anyhow::Result<()> {
+        // Create an endpoint, it allows creating and accepting
+        // connections in the iroh p2p world
+        let endpoint = iroh::Endpoint::builder()
+            .secret_key(maybe_secret_key.unwrap_or_else(|| SecretKey::generate(rand::rngs::OsRng)))
+            .discovery(iroh::discovery::mdns::MdnsDiscoveryBuilder)
+            // .discovery_n0()
+            .bind()
+            .await?;
+
+        match admin_args.cmd {
+            cli::AdminCmd::Ping {
+                node_id,
+                msg,
+                number,
+            } => {
+                for i in 0..number {
+                    let t_0 = Instant::now();
+                    let connection = endpoint
+                        .connect(node_id, protocols::ALPN_PING_0.as_bytes())
+                        .await
+                        .context(format!("connecting to {node_id}"))?;
+                    let (mut tx, mut rx) = connection.open_bi().await?;
+
+                    trace!("[{i}] writing {msg} to stream");
+                    tx.write_all(msg.as_bytes())
+                        .await
+                        .context("writing bytes to stream")?;
+
+                    tx.finish()?;
+
+                    let mut received_msg = String::new();
+
+                    tokio::select! {
+                        received_length = {
+                            trace!("[{i}] waiting for answer on stream");
+                            rx.read_to_string(&mut received_msg)
+                        } => {
+                            let rtt = Instant::now().duration_since(t_0);
+
+                            let received_length = received_length?;
+                            received_msg.truncate(received_length);
+
+                            anyhow::ensure!(received_msg == msg, format!("[{i}] mismatch on ping {i}"));
+
+                            info!("[{i}] completed within {rtt:#?}");
+                        },
+
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(10000000)) => {
+                            anyhow::bail!("timeout");
+                        }
+                    }
+
+                    connection.close(0u32.into(), b"finished");
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -204,26 +331,56 @@ mod tests {
     use anyhow::Context;
     use jsonpath_rust::JsonPath;
 
-    const TEST_KEYS: &[&str] = &[
-        r#"-----BEGIN OPENSSH PRIVATE KEY-----
+    struct TestKeyTuple {
+        openssh_key: &'static str,
+        pubkey: &'static str,
+    }
+
+    // List of tuples of (Open SSH private keys, NodeId)
+    const TEST_KEYS: &[TestKeyTuple] = &[
+        TestKeyTuple {
+            openssh_key: r#"-----BEGIN OPENSSH PRIVATE KEY-----
 b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
 QyNTUxOQAAACC6SNWhigagNIURuD746LkA6mU8QwhuVWEzRM3YGS9/bAAAAJiBEB4vgRAe
 LwAAAAtzc2gtZWQyNTUxOQAAACC6SNWhigagNIURuD746LkA6mU8QwhuVWEzRM3YGS9/bA
 AAAEDWgj234N5fzu7XILYAEnwYyg7TyI9hzVvQw3d7YOjKaLpI1aGKBqA0hRG4PvjouQDq
 ZTxDCG5VYTNEzdgZL39sAAAAFHN0ZXZlZWpAc3RldmVlai14MTNzAQ==
 -----END OPENSSH PRIVATE KEY-----"#,
-        r#"-----BEGIN OPENSSH PRIVATE KEY-----
+            pubkey: "ba48d5a18a06a0348511b83ef8e8b900ea653c43086e55613344cdd8192f7f6c",
+        },
+        TestKeyTuple {
+            openssh_key: r#"-----BEGIN OPENSSH PRIVATE KEY-----
 b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
 QyNTUxOQAAACCXbwLmxGzVMYkSjXty7Bou7/BQEhMN6+/Hpdq40HRBOQAAAJhJO/n3STv5
 9wAAAAtzc2gtZWQyNTUxOQAAACCXbwLmxGzVMYkSjXty7Bou7/BQEhMN6+/Hpdq40HRBOQ
 AAAEDCosvbvoBTxMkV5G6lmxrK4zc40ugmgahvKjqMxAPjfZdvAubEbNUxiRKNe3LsGi7v
 8FASEw3r78el2rjQdEE5AAAAFHN0ZXZlZWpAc3RldmVlai14MTNzAQ==
 -----END OPENSSH PRIVATE KEY-----"#,
+            pubkey: "976f02e6c46cd53189128d7b72ec1a2eeff05012130debefc7a5dab8d0744139",
+        },
+        TestKeyTuple {
+            openssh_key: r#"-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
+QyNTUxOQAAACB75UY6q5sfBEarcNvIg+D9Ky2gpqKoHcMGHlwlzkxOlAAAAJjwfFvc8Hxb
+3AAAAAtzc2gtZWQyNTUxOQAAACB75UY6q5sfBEarcNvIg+D9Ky2gpqKoHcMGHlwlzkxOlA
+AAAEBQf7R1sd08u0eHCFYyw7Pd6NZKTtXjRhxG+K+FI6eeQ3vlRjqrmx8ERqtw28iD4P0r
+LaCmoqgdwwYeXCXOTE6UAAAAFHN0ZXZlZWpAc3RldmVlai14MTNzAQ==
+-----END OPENSSH PRIVATE KEY-----"#,
+            pubkey: "7be5463aab9b1f0446ab70dbc883e0fd2b2da0a6a2a81dc3061e5c25ce4c4e94",
+        },
     ];
 
     #[test]
     fn parses_openssh_key() {
-        parse_openssh_ed25519(TEST_KEYS[0].as_bytes()).unwrap();
+        for TestKeyTuple {
+            openssh_key,
+            pubkey,
+        } in TEST_KEYS
+        {
+            let secret = parse_openssh_ed25519(openssh_key.as_bytes()).unwrap();
+
+            assert_eq!(&secret.public().to_string(), pubkey);
+        }
     }
 
     #[tokio::test]
@@ -251,12 +408,12 @@ AAAEDCosvbvoBTxMkV5G6lmxrK4zc40ugmgahvKjqMxAPjfZdvAubEbNUxiRKNe3LsGi7v
     async fn agent_sends_facts_to_coordinator() {
         tokio::select! {
              _coordinator_handle = tokio::spawn(coordinator::run(Some(
-                parse_openssh_ed25519(TEST_KEYS[0].as_bytes()).unwrap(),
+                parse_openssh_ed25519(TEST_KEYS[0].openssh_key.as_bytes()).unwrap(),
             ))) => {
             },
 
            //  agent_handle = tokio::spawn(agent::run(Some(
-           //     parse_openssh_ed25519(TEST_KEYS[1].as_bytes()).unwrap(),
+           //     parse_openssh_ed25519(TEST_KEYS[1].0.as_bytes()).unwrap(),
            // ))) => {
            // },
 
