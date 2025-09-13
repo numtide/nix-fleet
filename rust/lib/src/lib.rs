@@ -28,7 +28,7 @@ pub mod util {
 
         let bytes = data_encoding::HEXLOWER.encode(&bytes);
         let parsed = iroh::SecretKey::from_str(&bytes)
-            .context(format!("decoding {bytes} with length {}", bytes.len()))?;
+            .context(format!("decoding '{bytes:.3}..' ({} bytes)", bytes.len()))?;
 
         Ok(parsed)
     }
@@ -54,7 +54,9 @@ pub mod coordinator {
         let endpoint = iroh::Endpoint::builder()
             .alpns(vec![crate::protocols::ALPN_PING_0.as_bytes().to_vec()])
             .secret_key(maybe_secret_key.unwrap_or_else(|| SecretKey::generate(rand::rngs::OsRng)))
-            .discovery(iroh::discovery::mdns::MdnsDiscoveryBuilder)
+            .clear_discovery()
+            .discovery_local_network()
+            // .discovery(iroh::discovery::mdns::MdnsDiscoveryBuilder)
             // .discovery_n0()
             .bind()
             .await?;
@@ -112,7 +114,7 @@ pub mod coordinator {
                     .read_to_string(&mut receive_buf)
                     .await
                     .context("reading from stream")?;
-                trace!("read {received_length} bytes: {receive_buf}",);
+                trace!("read {received_length:e} bytes: '{receive_buf:.5}..'",);
                 receive_buf.truncate(received_length);
 
                 tx.write_all(receive_buf.as_bytes()).await?;
@@ -137,6 +139,7 @@ pub mod agent {
         // connections in the iroh p2p world
         let _endpoint = iroh::Endpoint::builder()
             .secret_key(maybe_secret_key.unwrap_or_else(|| SecretKey::generate(rand::rngs::OsRng)))
+            .clear_discovery()
             .discovery(iroh::discovery::mdns::MdnsDiscoveryBuilder)
             // .discovery_n0()
             .bind()
@@ -249,7 +252,7 @@ pub mod admin {
 
                 node_id: PublicKey,
 
-                #[arg(default_value = "ping")]
+                #[arg(default_value_t = str::repeat("1337", 1_500_000).to_string())]
                 msg: String,
             },
         }
@@ -263,7 +266,9 @@ pub mod admin {
         // connections in the iroh p2p world
         let endpoint = iroh::Endpoint::builder()
             .secret_key(maybe_secret_key.unwrap_or_else(|| SecretKey::generate(rand::rngs::OsRng)))
-            .discovery(iroh::discovery::mdns::MdnsDiscoveryBuilder)
+            .clear_discovery()
+            .discovery_local_network()
+            // .discovery(iroh::discovery::mdns::MdnsDiscoveryBuilder)
             // .discovery_n0()
             .bind()
             .await?;
@@ -282,10 +287,13 @@ pub mod admin {
                         .context(format!("connecting to {node_id}"))?;
                     let (mut tx, mut rx) = connection.open_bi().await?;
 
-                    trace!("[{i}] writing {msg} to stream");
+                    trace!(
+                        "[{i}] writing '{msg:.5}..' ({:e} bytes) to stream",
+                        msg.len()
+                    );
                     tx.write_all(msg.as_bytes())
                         .await
-                        .context("writing bytes to stream")?;
+                        .context(format!("writing {} bytes to stream", msg.len()))?;
 
                     tx.finish()?;
 
@@ -293,7 +301,7 @@ pub mod admin {
 
                     tokio::select! {
                         received_length = {
-                            trace!("[{i}] waiting for answer on stream");
+                            trace!("[{i}] waiting for an answer..");
                             rx.read_to_string(&mut received_msg)
                         } => {
                             let rtt = Instant::now().duration_since(t_0);
@@ -301,12 +309,20 @@ pub mod admin {
                             let received_length = received_length?;
                             received_msg.truncate(received_length);
 
-                            anyhow::ensure!(received_msg == msg, format!("[{i}] mismatch on ping {i}"));
+                            anyhow::ensure!(received_msg == msg, format!("[{i}] mismatch on ping"));
+                            anyhow::ensure!(received_length == msg.len(), format!("[{i}] mismatch on size"));
 
-                            info!("[{i}] completed within {rtt:#?}");
+                            // the data is sent once in each direction
+                            let b_s =
+                                2. * received_length as f64
+                                /
+                                (rtt.as_secs_f64() * 1024. * 1024.)
+                                ;
+
+                            info!("[{i}] completed within {rtt:#?} at {b_s:.4} MiB/s" );
                         },
 
-                        _ = tokio::time::sleep(std::time::Duration::from_millis(10000000)) => {
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(10_000)) => {
                             anyhow::bail!("timeout");
                         }
                     }
