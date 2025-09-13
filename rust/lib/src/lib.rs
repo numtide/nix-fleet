@@ -55,15 +55,16 @@ pub mod coordinator {
             .alpns(vec![crate::protocols::ALPN_PING_0.as_bytes().to_vec()])
             .secret_key(maybe_secret_key.unwrap_or_else(|| SecretKey::generate(rand::rngs::OsRng)))
             .clear_discovery()
-            .discovery_local_network()
-            // .discovery(iroh::discovery::mdns::MdnsDiscoveryBuilder)
+            .discovery(iroh::discovery::mdns::MdnsDiscoveryBuilder)
+            .relay_mode(iroh::RelayMode::Disabled)
             // .discovery_n0()
             .bind()
             .await?;
 
         let mut node_addr = endpoint.node_addr();
         let node_id = node_addr.initialized().await.node_id;
-        debug!("got node_id {node_id}");
+        let bind_info = endpoint.bound_sockets();
+        debug!("got node_id {node_id}; listening on {bind_info:?}");
 
         loop {
             let incoming = tokio::select! {
@@ -141,6 +142,7 @@ pub mod agent {
             .secret_key(maybe_secret_key.unwrap_or_else(|| SecretKey::generate(rand::rngs::OsRng)))
             .clear_discovery()
             .discovery(iroh::discovery::mdns::MdnsDiscoveryBuilder)
+            .relay_mode(iroh::RelayMode::Disabled)
             // .discovery_n0()
             .bind()
             .await?;
@@ -267,8 +269,8 @@ pub mod admin {
         let endpoint = iroh::Endpoint::builder()
             .secret_key(maybe_secret_key.unwrap_or_else(|| SecretKey::generate(rand::rngs::OsRng)))
             .clear_discovery()
-            .discovery_local_network()
-            // .discovery(iroh::discovery::mdns::MdnsDiscoveryBuilder)
+            .relay_mode(iroh::RelayMode::Disabled)
+            .discovery(iroh::discovery::mdns::MdnsDiscoveryBuilder)
             // .discovery_n0()
             .bind()
             .await?;
@@ -312,7 +314,7 @@ pub mod admin {
                             anyhow::ensure!(received_msg == msg, format!("[{i}] mismatch on ping"));
                             anyhow::ensure!(received_length == msg.len(), format!("[{i}] mismatch on size"));
 
-                            // the data is sent once in each direction
+                            // The data is sent once in each direction
                             let b_s =
                                 2. * received_length as f64
                                 /
