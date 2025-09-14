@@ -5,12 +5,9 @@ pub mod util {
     use std::str::FromStr;
 
     use anyhow::Context;
-    use iroh::SecretKey;
+    use iroh::{PublicKey, SecretKey};
 
-    pub fn parse_openssh_ed25519<R>(mut r: R) -> anyhow::Result<SecretKey>
-    where
-        R: std::io::Read,
-    {
+    pub fn parse_openssh_ed25519_private(mut r: impl std::io::Read) -> anyhow::Result<SecretKey> {
         let mut raw = Vec::new();
         r.read_to_end(&mut raw)?;
 
@@ -32,6 +29,21 @@ pub mod util {
 
         Ok(parsed)
     }
+
+    pub fn parse_openssh_ed25519_public(mut r: impl std::io::Read) -> anyhow::Result<PublicKey> {
+        let mut raw = String::new();
+        r.read_to_string(&mut raw)?;
+
+        let ssh_public_key: ssh_key::PublicKey = ssh_key::PublicKey::from_openssh(&raw)
+            .context(format!("converting {raw} to ssh_key::PublicKey"))?;
+
+        let ssh_public_key_ed25519 = ssh_public_key
+            .key_data()
+            .ed25519()
+            .ok_or_else(|| anyhow::anyhow!("not a ed25519 public key"))?;
+
+        Ok(PublicKey::from_bytes(&ssh_public_key_ed25519.0)?)
+    }
 }
 
 pub mod protocols {
@@ -43,10 +55,7 @@ pub mod coordinator {
     use anyhow::Context;
     use iroh::{SecretKey, Watcher};
     use tokio::io::AsyncReadExt;
-    use tracing::debug;
-    use tracing::info;
-    use tracing::trace;
-    use tracing::warn;
+    use tracing::{debug, info, trace, warn};
 
     pub async fn run(maybe_secret_key: Option<SecretKey>) -> anyhow::Result<()> {
         // Create an endpoint, it allows creating and accepting
@@ -177,7 +186,7 @@ pub mod facts {
             let mid_data = mid::data(MID_SEED).context("getting machine data")?;
 
             let maybe_facter = tokio::task::spawn_blocking(|| {
-                better_commands::run(&mut std::process::Command::new("facter").arg("--json"))
+                better_commands::run(std::process::Command::new("facter").arg("--json"))
             })
             .await
             .context("running `facter` from PATH")
@@ -340,50 +349,37 @@ pub mod admin {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{str::FromStr, time::Duration};
 
-    use crate::util::parse_openssh_ed25519;
+    use crate::util::parse_openssh_ed25519_private;
 
     use super::*;
 
     use anyhow::Context;
+    use iroh::NodeId;
     use jsonpath_rust::JsonPath;
 
     struct TestKeyTuple {
         openssh_key: &'static str,
+        openssh_pubkey: &'static str,
         pubkey: &'static str,
     }
 
     // List of tuples of (Open SSH private keys, NodeId)
     const TEST_KEYS: &[TestKeyTuple] = &[
         TestKeyTuple {
-            openssh_key: r#"-----BEGIN OPENSSH PRIVATE KEY-----
-b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
-QyNTUxOQAAACC6SNWhigagNIURuD746LkA6mU8QwhuVWEzRM3YGS9/bAAAAJiBEB4vgRAe
-LwAAAAtzc2gtZWQyNTUxOQAAACC6SNWhigagNIURuD746LkA6mU8QwhuVWEzRM3YGS9/bA
-AAAEDWgj234N5fzu7XILYAEnwYyg7TyI9hzVvQw3d7YOjKaLpI1aGKBqA0hRG4PvjouQDq
-ZTxDCG5VYTNEzdgZL39sAAAAFHN0ZXZlZWpAc3RldmVlai14MTNzAQ==
------END OPENSSH PRIVATE KEY-----"#,
+            openssh_key: include_str!("../../../fixtures/coordinator.ed25519"),
+            openssh_pubkey: include_str!("../../../fixtures/coordinator.ed25519.pub"),
             pubkey: "ba48d5a18a06a0348511b83ef8e8b900ea653c43086e55613344cdd8192f7f6c",
         },
         TestKeyTuple {
-            openssh_key: r#"-----BEGIN OPENSSH PRIVATE KEY-----
-b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
-QyNTUxOQAAACCXbwLmxGzVMYkSjXty7Bou7/BQEhMN6+/Hpdq40HRBOQAAAJhJO/n3STv5
-9wAAAAtzc2gtZWQyNTUxOQAAACCXbwLmxGzVMYkSjXty7Bou7/BQEhMN6+/Hpdq40HRBOQ
-AAAEDCosvbvoBTxMkV5G6lmxrK4zc40ugmgahvKjqMxAPjfZdvAubEbNUxiRKNe3LsGi7v
-8FASEw3r78el2rjQdEE5AAAAFHN0ZXZlZWpAc3RldmVlai14MTNzAQ==
------END OPENSSH PRIVATE KEY-----"#,
+            openssh_key: include_str!("../../../fixtures/agent.ed25519"),
+            openssh_pubkey: include_str!("../../../fixtures/agent.ed25519.pub"),
             pubkey: "976f02e6c46cd53189128d7b72ec1a2eeff05012130debefc7a5dab8d0744139",
         },
         TestKeyTuple {
-            openssh_key: r#"-----BEGIN OPENSSH PRIVATE KEY-----
-b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
-QyNTUxOQAAACB75UY6q5sfBEarcNvIg+D9Ky2gpqKoHcMGHlwlzkxOlAAAAJjwfFvc8Hxb
-3AAAAAtzc2gtZWQyNTUxOQAAACB75UY6q5sfBEarcNvIg+D9Ky2gpqKoHcMGHlwlzkxOlA
-AAAEBQf7R1sd08u0eHCFYyw7Pd6NZKTtXjRhxG+K+FI6eeQ3vlRjqrmx8ERqtw28iD4P0r
-LaCmoqgdwwYeXCXOTE6UAAAAFHN0ZXZlZWpAc3RldmVlai14MTNzAQ==
------END OPENSSH PRIVATE KEY-----"#,
+            openssh_key: include_str!("../../../fixtures/admin.ed25519"),
+            openssh_pubkey: include_str!("../../../fixtures/admin.ed25519.pub"),
             pubkey: "7be5463aab9b1f0446ab70dbc883e0fd2b2da0a6a2a81dc3061e5c25ce4c4e94",
         },
     ];
@@ -392,12 +388,17 @@ LaCmoqgdwwYeXCXOTE6UAAAAFHN0ZXZlZWpAc3RldmVlai14MTNzAQ==
     fn parses_openssh_key() {
         for TestKeyTuple {
             openssh_key,
+            openssh_pubkey,
             pubkey,
         } in TEST_KEYS
         {
-            let secret = parse_openssh_ed25519(openssh_key.as_bytes()).unwrap();
-
+            let secret = parse_openssh_ed25519_private(openssh_key.as_bytes()).unwrap();
             assert_eq!(&secret.public().to_string(), pubkey);
+
+            let y_coordinate =
+                util::parse_openssh_ed25519_public(openssh_pubkey.as_bytes()).unwrap();
+            let nodeid = NodeId::from_str(pubkey).unwrap();
+            assert_eq!(nodeid, y_coordinate);
         }
     }
 
@@ -426,7 +427,7 @@ LaCmoqgdwwYeXCXOTE6UAAAAFHN0ZXZlZWpAc3RldmVlai14MTNzAQ==
     async fn agent_sends_facts_to_coordinator() {
         tokio::select! {
              _coordinator_handle = tokio::spawn(coordinator::run(Some(
-                parse_openssh_ed25519(TEST_KEYS[0].openssh_key.as_bytes()).unwrap(),
+                parse_openssh_ed25519_private(TEST_KEYS[0].openssh_key.as_bytes()).unwrap(),
             ))) => {
             },
 
