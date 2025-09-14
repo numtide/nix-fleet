@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{command, Parser, Subcommand};
 
-use lib::{admin::cli::AdminArgs, util::parse_openssh_ed25519};
+use lib::{admin::cli::AdminArgs, util::parse_openssh_ed25519_private};
 
 #[derive(Debug, Parser)]
 #[command(version, about)]
@@ -35,8 +35,10 @@ async fn main() -> anyhow::Result<()> {
     let maybe_secret_key = match args.maybe_secret_key {
         None => None,
         Some(path) => Some(
-            tokio::task::spawn_blocking(move || parse_openssh_ed25519(std::fs::File::open(&path)?))
-                .await??,
+            tokio::task::spawn_blocking(move || {
+                parse_openssh_ed25519_private(std::fs::File::open(&path)?)
+            })
+            .await??,
         ),
     };
 
