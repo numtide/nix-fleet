@@ -2,7 +2,10 @@ use std::path::PathBuf;
 
 use clap::{command, Parser, Subcommand};
 
-use lib::{admin::cli::AdminArgs, util::parse_openssh_ed25519_private};
+use lib::{
+    admin::cli::{AdminArgs, AgentArgs},
+    util::parse_openssh_ed25519_private,
+};
 
 #[derive(Debug, Parser)]
 #[command(version, about)]
@@ -17,7 +20,7 @@ struct App {
 #[derive(Debug, Clone, Subcommand)]
 enum Applet {
     Coordinator,
-    Agent,
+    Agent(AgentArgs),
     Admin(AdminArgs),
 }
 
@@ -43,14 +46,10 @@ async fn main() -> anyhow::Result<()> {
     };
 
     match args.applet {
-        Applet::Coordinator => {
-            lib::coordinator::run(maybe_secret_key).await.unwrap();
+        Applet::Coordinator => lib::coordinator::run(maybe_secret_key).await,
+        Applet::Agent(agent_args) => {
+            lib::agent::run(maybe_secret_key, agent_args.coordinators.into_boxed_slice()).await
         }
-        Applet::Agent => {
-            lib::agent::run(maybe_secret_key).await.unwrap();
-        }
-        Applet::Admin(admin_args) => lib::admin::run(maybe_secret_key, admin_args).await.unwrap(),
+        Applet::Admin(admin_args) => lib::admin::run(maybe_secret_key, admin_args).await,
     }
-
-    Ok(())
 }

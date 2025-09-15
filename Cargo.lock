@@ -1947,6 +1947,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "better-commands",
+ "blake3",
  "clap",
  "data-encoding",
  "iroh",
@@ -1959,6 +1960,7 @@ dependencies = [
  "serde_json",
  "ssh-key",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 
