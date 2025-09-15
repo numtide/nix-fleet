@@ -4,5 +4,6 @@ words = [
     "nixos",
     "openssh",
     "rtt",
+    "uptime",
     "wip",
 ]

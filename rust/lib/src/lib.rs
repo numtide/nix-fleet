@@ -46,22 +46,125 @@ pub mod util {
     }
 }
 
+/// Protocol logic used on top of iroh
 pub mod protocols {
-    pub const ALPN_PING_0: &str = "nix-fleet/ping/0";
-    pub const ALPN_ENROLL_AGENT_0: &str = "nix-fleet/enroll-agent/0";
+
+    /// A simple protocol that will echo back the data to the sender.
+    pub mod echo {
+        use std::future::Future;
+
+        use iroh::protocol::{AcceptError, ProtocolHandler};
+        use tracing::debug;
+
+        #[derive(Debug)]
+        pub struct Echo;
+
+        impl Echo {
+            pub const ALPN: &[u8] = b"nix-fleet/echo/0";
+        }
+
+        impl Echo {
+            pub fn send() -> anyhow::Result<()> {
+                todo!("move the admin code here")
+            }
+        }
+
+        impl ProtocolHandler for Echo {
+            fn accept(
+                &self,
+                connection: iroh::endpoint::Connection,
+            ) -> impl Future<Output = Result<(), AcceptError>> + Send {
+                async move {
+                    // Err(AcceptError::User {
+                    //     source: "not implemented".into(),
+                    // })
+
+                    let remote_node_id = connection.remote_node_id()?;
+                    debug!("accepted connection from {remote_node_id}");
+
+                    let (mut tx, mut rx) = connection.accept_bi().await?;
+
+                    let num_bytes_copied = tokio::io::copy(&mut rx, &mut tx).await?;
+
+                    debug!("copied {num_bytes_copied} bytes");
+
+                    tx.finish()?;
+
+                    connection.closed().await;
+
+                    Ok(())
+                }
+            }
+        }
+    }
+
+    pub mod node_admin {
+        use std::future::Future;
+
+        use iroh::protocol::{AcceptError, ProtocolHandler};
+
+        #[derive(Debug)]
+        pub struct NodeAdmin;
+
+        impl NodeAdmin {
+            pub const ALPN: &[u8] = b"nix-fleet/node-admin/0";
+        }
+
+        impl ProtocolHandler for NodeAdmin {
+            fn accept(
+                &self,
+                _connection: iroh::endpoint::Connection,
+            ) -> impl Future<Output = Result<(), AcceptError>> + Send {
+                async move {
+                    Err(AcceptError::User {
+                        source: "todo".into(),
+                    })
+                }
+            }
+        }
+    }
+
+    pub mod enroll_agent {
+        use std::future::Future;
+
+        use iroh::protocol::{AcceptError, ProtocolHandler};
+
+        #[derive(Debug)]
+        pub struct EnrollAgent;
+
+        impl EnrollAgent {
+            pub const ALPN: &[u8] = b"nix-fleet/enroll-agent/0";
+        }
+
+        impl ProtocolHandler for EnrollAgent {
+            fn accept(
+                &self,
+                _connection: iroh::endpoint::Connection,
+            ) -> impl Future<Output = Result<(), AcceptError>> + Send {
+                async move {
+                    Err(AcceptError::User {
+                        source: "todo".into(),
+                    })
+                }
+            }
+        }
+    }
 }
 
+/// This module implements the Coordinator functionality.
+/// It's expected to run on machines with high uptime, bandwidth, and reliability; a.k.a. servers.
 pub mod coordinator {
-    use anyhow::Context;
-    use iroh::{SecretKey, Watcher};
-    use tokio::io::AsyncReadExt;
-    use tracing::{debug, info, trace, warn};
+    use iroh::{protocol::Router, SecretKey, Watcher};
+    use tracing::info;
 
+    use crate::protocols::{echo::Echo, enroll_agent::EnrollAgent, node_admin::NodeAdmin};
+
+    /// Run the Coordinator.
+    /// The only stop condition is currently either an error or Ctrl+C.
     pub async fn run(maybe_secret_key: Option<SecretKey>) -> anyhow::Result<()> {
         // Create an endpoint, it allows creating and accepting
         // connections in the iroh p2p world
         let endpoint = iroh::Endpoint::builder()
-            .alpns(vec![crate::protocols::ALPN_PING_0.as_bytes().to_vec()])
             .secret_key(maybe_secret_key.unwrap_or_else(|| SecretKey::generate(rand::rngs::OsRng)))
             .clear_discovery()
             .discovery(iroh::discovery::mdns::MdnsDiscoveryBuilder)
@@ -73,81 +176,33 @@ pub mod coordinator {
         let mut node_addr = endpoint.node_addr();
         let node_id = node_addr.initialized().await.node_id;
         let bind_info = endpoint.bound_sockets();
-        debug!("got node_id {node_id}; listening on {bind_info:?}");
+        info!("node_id: {node_id}; listening on {bind_info:?}");
 
-        loop {
-            let incoming = tokio::select! {
-                incoming = endpoint.accept() => incoming,
-                _ = tokio::signal::ctrl_c() => {
-                    info!("got ctrl-c, exiting");
-                    break;
-                }
-            };
-            let Some(incoming) = incoming else {
-                break;
-            };
-            let Ok(connecting) = incoming.accept() else {
-                break;
-            };
-            tokio::spawn(async move {
-                if let Err(cause) = handle_endpoint_accept(connecting).await {
-                    // log error at warn level
-                    //
-                    // we should know about it, but it's not fatal
-                    warn!("error handling connection: {}", cause);
-                }
-            });
-        }
+        let router = Router::builder(endpoint)
+            .accept(Echo::ALPN, Echo)
+            .accept(NodeAdmin::ALPN, NodeAdmin)
+            .accept(EnrollAgent::ALPN, EnrollAgent)
+            .spawn();
 
-        Ok(())
-    }
-
-    // Handle a new incoming connection on the endpoint
-    async fn handle_endpoint_accept(connecting: iroh::endpoint::Connecting) -> anyhow::Result<()> {
-        let connection = connecting.await.context("error accepting connection")?;
-        let remote_node_id = &connection.remote_node_id()?;
-        debug!("connection from {remote_node_id}");
-
-        let (mut tx, mut rx) = connection
-            .accept_bi()
-            .await
-            .context("error accepting stream")?;
-
-        if let Some(alpn) = connection.alpn() {
-            let alpn_str = str::from_utf8(&alpn)?;
-            debug!("received a connection for {alpn_str} from {remote_node_id}");
-
-            let mut receive_buf = String::new();
-            if alpn_str == crate::protocols::ALPN_PING_0 {
-                debug!("processing {alpn_str} request");
-                let received_length = rx
-                    .read_to_string(&mut receive_buf)
-                    .await
-                    .context("reading from stream")?;
-                trace!("read {received_length:e} bytes: '{receive_buf:.5}..'",);
-                receive_buf.truncate(received_length);
-
-                tx.write_all(receive_buf.as_bytes()).await?;
-                tx.finish()?;
-
-                // Wait until the remote closes the connection, which it does once it received the response.
-                connection.closed().await;
-            } else {
-                anyhow::bail!("unknown ALPN: {alpn_str}")
-            }
-        }
+        tokio::signal::ctrl_c().await?;
+        router.shutdown().await?;
 
         Ok(())
     }
 }
 
 pub mod agent {
-    use iroh::SecretKey;
+    use iroh::{protocol::Router, PublicKey, SecretKey};
 
-    pub async fn run(maybe_secret_key: Option<SecretKey>) -> anyhow::Result<()> {
+    use crate::protocols::{echo::Echo, node_admin::NodeAdmin};
+
+    pub async fn run(
+        maybe_secret_key: Option<SecretKey>,
+        _coordinators: Box<[PublicKey]>,
+    ) -> anyhow::Result<()> {
         // Create an endpoint, it allows creating and accepting
         // connections in the iroh p2p world
-        let _endpoint = iroh::Endpoint::builder()
+        let endpoint = iroh::Endpoint::builder()
             .secret_key(maybe_secret_key.unwrap_or_else(|| SecretKey::generate(rand::rngs::OsRng)))
             .clear_discovery()
             .discovery(iroh::discovery::mdns::MdnsDiscoveryBuilder)
@@ -155,6 +210,14 @@ pub mod agent {
             // .discovery_n0()
             .bind()
             .await?;
+
+        let router = Router::builder(endpoint)
+            .accept(Echo::ALPN, Echo)
+            .accept(NodeAdmin::ALPN, NodeAdmin)
+            .spawn();
+
+        tokio::signal::ctrl_c().await?;
+        router.shutdown().await?;
 
         Ok(())
     }
@@ -235,9 +298,11 @@ pub mod facts {
 }
 
 pub mod admin {
+    use std::sync::Arc;
+
     use anyhow::Context;
     use iroh::SecretKey;
-    use tokio::{io::AsyncReadExt, time::Instant};
+    use tokio::time::Instant;
     use tracing::{info, trace};
 
     use crate::{admin::cli::AdminArgs, protocols};
@@ -246,29 +311,63 @@ pub mod admin {
         use clap::{Args, Subcommand};
         use iroh::PublicKey;
 
+        /// Definition for the top-level Agent command
+        #[derive(Debug, Clone, Args)]
+        #[command(version, about)]
+        pub struct AgentArgs {
+            /// Pass one or multiple NodeIds that are used as coordinators
+            #[arg(long)]
+            pub coordinators: Vec<iroh::PublicKey>,
+        }
+
+        /// Definition for the top-level Admin command
         #[derive(Debug, Clone, Args)]
         #[command(version, about)]
         pub struct AdminArgs {
+            /// Pass one or multiple NodeIds that are used as coordinators
+            #[arg(long)]
+            pub coordinators: Vec<String>,
+
+            /// The admin command to call.
             #[command(subcommand)]
             pub cmd: AdminCmd,
         }
 
+        /// All admin subcommands
         #[derive(Debug, Clone, Subcommand)]
         pub enum AdminCmd {
-            /// Sends a message to the node with the PublicKey
-            Ping {
+            /// Send a message to the node with the PublicKey
+            Echo {
                 /// Number of times the message is sent and expected to come back.
                 #[arg(short, long, default_value_t = 1)]
                 number: usize,
 
+                /// The NodeId to send the message to.
                 node_id: PublicKey,
 
-                #[arg(default_value_t = str::repeat("1337", 1_500_000).to_string())]
+                /// Effective message size in bytes, achieved by repeating the `msg`'s content.
+                #[arg(long, default_value_t = 1024)]
+                size: usize,
+
+                /// Timeout in seconds for each echo round.
+                #[arg(long, default_value_t = 0.1)]
+                timeout: f64,
+
+                /// The message that will be sent
+                #[arg(default_value = "nix-fleet")]
                 msg: String,
+            },
+
+            /// Retrieve a list of agents
+            ListAgents {
+                /// Only list unassigned agents
+                only_unassigned: bool,
             },
         }
     }
 
+    /// Run the Agent.
+    /// The only stop condition is currently either an error or Ctrl+C.
     pub async fn run(
         maybe_secret_key: Option<SecretKey>,
         admin_args: AdminArgs,
@@ -285,47 +384,91 @@ pub mod admin {
             .await?;
 
         match admin_args.cmd {
-            cli::AdminCmd::Ping {
+            cli::AdminCmd::Echo {
                 node_id,
                 msg,
                 number,
+                size,
+                timeout,
             } => {
+                let connection = endpoint
+                    .connect(node_id, protocols::echo::Echo::ALPN)
+                    .await
+                    .context(format!("connecting to {node_id}"))?;
+
+                let mut msg = msg.repeat(size / msg.len() + (size % msg.len()));
+                msg.truncate(size);
+                let msg = msg;
+
+                let msg_hash = blake3::Hasher::new()
+                    .update(msg.as_bytes())
+                    .finalize()
+                    .to_string();
+
+                let msg = std::sync::Arc::new(msg);
+
+                let (tx, mut rx) = connection.open_bi().await?;
+
+                let tx = std::sync::Arc::new(tokio::sync::Mutex::new(tx));
+
                 for i in 0..number {
                     let t_0 = Instant::now();
-                    let connection = endpoint
-                        .connect(node_id, protocols::ALPN_PING_0.as_bytes())
-                        .await
-                        .context(format!("connecting to {node_id}"))?;
-                    let (mut tx, mut rx) = connection.open_bi().await?;
 
-                    trace!(
-                        "[{i}] writing '{msg:.5}..' ({:e} bytes) to stream",
-                        msg.len()
-                    );
-                    tx.write_all(msg.as_bytes())
-                        .await
-                        .context(format!("writing {} bytes to stream", msg.len()))?;
+                    trace!("[{i}] writing ({:e} bytes) to stream", msg.len());
 
-                    tx.finish()?;
+                    // The protocol requires the sender to start receiving back immediately or else it will stall.
+                    tokio::spawn({
+                        let msg = std::sync::Arc::clone(&msg);
 
-                    let mut received_msg = String::new();
+                        let tx = Arc::clone(&tx);
 
+                        async move {
+                            let mut tx_locked = tx.lock().await;
+
+                            tx_locked
+                                .write_all(&msg.as_bytes())
+                                .await
+                                .context(format!("writing {} bytes to stream", msg.len()))?;
+
+                            trace!("[{i}] wrote ({:e} bytes) to stream", msg.len());
+
+                            anyhow::Ok(())
+                        }
+                    });
+
+                    let mut reader_future = async || {
+                        let mut len = 0;
+
+                        let mut hasher = blake3::Hasher::new();
+
+                        while let Some(chunk) = rx.read_chunk(1024 * 1024, true).await? {
+                            len += chunk.bytes.len();
+                            hasher.update(&chunk.bytes);
+
+                            if len == msg.len() {
+                                break;
+                            }
+                        }
+
+                        let hash = hasher.finalize().to_string();
+
+                        anyhow::Ok((hash, len))
+                    };
+
+                    trace!("[{i}] waiting for an answer..");
                     tokio::select! {
-                        received_length = {
-                            trace!("[{i}] waiting for an answer..");
-                            rx.read_to_string(&mut received_msg)
-                        } => {
+                        read_result = reader_future() => {
+                            let (hash, len) = read_result?;
+
+                            trace!("read {len} bytes from stream");
+
                             let rtt = Instant::now().duration_since(t_0);
 
-                            let received_length = received_length?;
-                            received_msg.truncate(received_length);
-
-                            anyhow::ensure!(received_msg == msg, format!("[{i}] mismatch on ping"));
-                            anyhow::ensure!(received_length == msg.len(), format!("[{i}] mismatch on size"));
+                            anyhow::ensure!(msg_hash == hash, format!("[{i}] hash mismatch"));
 
                             // The data is sent once in each direction
                             let b_s =
-                                2. * received_length as f64
+                                2. * msg.len() as f64
                                 /
                                 (rtt.as_secs_f64() * 1024. * 1024.)
                                 ;
@@ -333,13 +476,16 @@ pub mod admin {
                             info!("[{i}] completed within {rtt:#?} at {b_s:.4} MiB/s" );
                         },
 
-                        _ = tokio::time::sleep(std::time::Duration::from_millis(10_000)) => {
+                        _ = tokio::time::sleep(std::time::Duration::from_secs_f64(timeout)) => {
                             anyhow::bail!("timeout");
                         }
                     }
-
-                    connection.close(0u32.into(), b"finished");
                 }
+
+                connection.close(0u32.into(), b"finished");
+            }
+            cli::AdminCmd::ListAgents { .. } => {
+                todo!("")
             }
         }
 
@@ -351,7 +497,10 @@ pub mod admin {
 mod tests {
     use std::{str::FromStr, time::Duration};
 
-    use crate::util::parse_openssh_ed25519_private;
+    use crate::{
+        admin::cli::{AdminArgs, AdminCmd},
+        util::parse_openssh_ed25519_private,
+    };
 
     use super::*;
 
@@ -403,6 +552,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn echo_completes() {
+        let _coordinator_handle = tokio::spawn(coordinator::run(Some(
+            parse_openssh_ed25519_private(TEST_KEYS[0].openssh_key.as_bytes()).unwrap(),
+        )));
+
+        tokio::spawn(admin::run(
+            Some(parse_openssh_ed25519_private(TEST_KEYS[2].openssh_key.as_bytes()).unwrap()),
+            AdminArgs {
+                cmd: AdminCmd::Echo {
+                    number: 10,
+                    node_id: iroh::PublicKey::from_str(TEST_KEYS[0].pubkey).unwrap(),
+                    msg: "hello".to_string(),
+                    size: 1,
+                    timeout: 0.1,
+                },
+                coordinators: vec![],
+            },
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    }
+
+    #[tokio::test]
     async fn facts_can_be_gathered() {
         let facts = facts::Facts::try_from_environment().await.unwrap();
 
@@ -424,21 +597,47 @@ mod tests {
     /// Verify that the agent sends its facts to the coordinator.
     #[ignore = "WIP"]
     #[tokio::test]
-    async fn agent_sends_facts_to_coordinator() {
-        tokio::select! {
-             _coordinator_handle = tokio::spawn(coordinator::run(Some(
-                parse_openssh_ed25519_private(TEST_KEYS[0].openssh_key.as_bytes()).unwrap(),
-            ))) => {
-            },
+    async fn admin_can_list_agents_via_coordinator() {
+        // Spawn the coordinator
+        tokio::spawn(coordinator::run(Some(
+            parse_openssh_ed25519_private(TEST_KEYS[0].openssh_key.as_bytes()).unwrap(),
+        )));
 
-           //  agent_handle = tokio::spawn(agent::run(Some(
-           //     parse_openssh_ed25519(TEST_KEYS[1].0.as_bytes()).unwrap(),
-           // ))) => {
-           // },
+        // spawn an agent that will talk to the coordinator
 
-           _ = tokio::time::sleep(Duration::from_millis(100)) => {
-               panic!("timeout")
-           }
-        }
+        tokio::spawn(agent::run(
+            Some(parse_openssh_ed25519_private(TEST_KEYS[1].openssh_key.as_bytes()).unwrap()),
+            // TODO
+            [iroh::PublicKey::from_str(TEST_KEYS[0].pubkey).unwrap()].into(),
+        ));
+
+        {
+            //
+            // Define all the futures in a scope and then pass them concisely to select.
+            // This circumvents rustfmt not formatting code inside the select! macro.
+            //
+
+            let admin_future = admin::run(
+                Some(parse_openssh_ed25519_private(TEST_KEYS[2].openssh_key.as_bytes()).unwrap()),
+                AdminArgs {
+                    cmd: AdminCmd::ListAgents {
+                        only_unassigned: false,
+                    },
+                    coordinators: Default::default(),
+                },
+            );
+
+            let timeout_future = tokio::time::sleep(Duration::from_millis(100));
+
+            tokio::select! {
+               _ = admin_future => {
+                   // query coordinator for a list of agents
+                   // assert the list contains the expected agent
+
+                   todo!("")
+               },
+               _ = timeout_future => { panic!("timeout") },
+            }
+        };
     }
 }

@@ -21,3 +21,5 @@ better-commands = "1.0.2"
 jsonpath-rust = "1.0.4"
 ssh-key = { version = "0.6.7", features = ["ed25519", "encryption"] }
 data-encoding = "2.9.0"
+tokio-util = { version = "0.7.16", features = ["io"] }
+blake3 = "1.8.2"
