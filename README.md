@@ -32,4 +32,16 @@ This repository uses the [blueprint](https://github.com/numtide/blueprint) struc
 
 ---
 
-This project was funded through the NGI Fediversity Fund, a fund established by NLnet with financial support from the European Commission's Next Generation Internet programme, as a pilot programme under the aegis of DG Communications Networks, Content and Technology. NGI Fediversity is part of the Horizon Europe research and innovation programme under grant agreement No. 101136078.
+---
+
+### Funding
+
+
+#### [NLnet Grant][nlnet-grant-1]
+
+This project [is currently funded][nlnet-grant-1] through [NGI Fediversity Fund](https://nlnet.nl/fediversity), a fund established by [NLnet](https://nlnet.nl) with financial support from the European Commission's [Next Generation Internet](https://ngi.eu) program. Learn more at the [NLnet project page](https://nlnet.nl/project/Agent-based-deployment).
+
+[<img src="https://nlnet.nl/logo/banner.png" alt="NLnet foundation logo" width="20%" />](https://nlnet.nl)
+
+
+[nlnet-grant-1]: https://nlnet.nl/project/Agent-based-deployment
