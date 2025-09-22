@@ -1,10 +1,8 @@
 # nix-fleet
 
-Manage partially off-line fleets for NixOS deployments
+Nix(OS) fleet management solution for organizations.
 
 This project aims to build robust and user-friendly device management tooling, specifically tailored for asynchronously managing a fleet of devices that are capable of and intended to run NixOS. These requirements were identified as unlocking NixOS adoption in small and medium business and educational organizations.
-
-Upon successful completion of this first phase, the tooling will provide a centralized management system offering access control, fleet oversight, streamlined machine enrollment, and clear feedback on deployment status.
 
 ## Repository Layout
 
