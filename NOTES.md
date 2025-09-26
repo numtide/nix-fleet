@@ -4,7 +4,7 @@ These will be refactored later.
 
 ## Iroh
 
-*  [iroh-node-util code showing SSH key hadnling](https://github.com/n0-computer/iroh-node-util/blob/3e9702ad215b9b986c6d45e4762a8fbe241163b0/src/fs.rs#L11)
+*  [iroh-node-util code showing SSH key handling](https://github.com/n0-computer/iroh-node-util/blob/3e9702ad215b9b986c6d45e4762a8fbe241163b0/src/fs.rs#L11)
 
 ## Coordinator Consistency & Resilience
 Avoiding a single-point-of-failure in the coordinator functionality of the fleet is possible with the following approaches:
