@@ -86,3 +86,8 @@ This project [is currently funded][nlnet-grant-1] through [NGI Fediversity Fund]
 
 
 [nlnet-grant-1]: https://nlnet.nl/project/Agent-based-deployment
+
+
+## License
+
+`SPDX-License-Identifier: MIT OR Apache-2.0`
