@@ -1,6 +1,7 @@
 words = [
     "alpn",
     "facter",
+    "natively",
     "nixos",
     "openssh",
     "rtt",
