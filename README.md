@@ -3,13 +3,13 @@
 This project aims to build robust and user-friendly fleet management tooling, tailored for asynchronously managing devices that are capable of and intended to run NixOS. It inherits its motivational roots from [NITS](https://github.com/numtide/nits).
 
 ## Features \& Rationale
-The logical model encompasses Coordinators, Agents, and Admins. CI/CD systems are merged in to Admin category.
+The logical model encompasses Coordinators, Agents, and Admins. CI/CD systems are merged into the Admin category.
 
 ```mermaid
 flowchart TD;
     Ag[Agents]
     Ad[Admins]
-    C[Coordinators]
+    C[Coordinator(s)]
     DB[(State)]
 
     C --- DB
@@ -39,12 +39,12 @@ The assumption is that the devices are not capable of or it's undesired to build
 In this scenario it's redundant to evaluate again and there's already the need for a trusted signature for the binary cache. It's a low-hanging fruit to make the final closure the update payload, and transmit metadata to the devices that enables them to download and apply the update.
 
 ### Why a new tool?
-While the following tools provide pull-based updates, they rely on evaluation to take place on the updating device, and aren't architected to support
+While the following tools provide pull-based updates, they rely on evaluation to take place on the updating device, and aren't architected to support the tri-component model this project is designed around.
 
 * [Bento](https://github.com/rapenne-s/bento): Written in Shell and intentionally kept simple. Not easily extensible/modular.
-* NixOS' native `system.autoUpgrade`: Just a shell script
-* [Comin](https://github.com/nlewo/comin):
-* [npcnix](https://github.com/rustshop/npcnix)
+* [Comin](https://github.com/nlewo/comin): Update daemon uses Git repositories as static remotes.
+* [npcnix](https://github.com/rustshop/npcnix): Update daemon uses AWS resources as static remote.
+* NixOS' native `system.autoUpgrade`: Just a shell script on a timer.
 
 ## Contributing
 
