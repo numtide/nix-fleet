@@ -9,7 +9,7 @@ The logical model encompasses Coordinators, Agents, and Admins. CI/CD systems ar
 flowchart TD;
     Ag[Agents]
     Ad[Admins]
-    C[Coordinator(s)]
+    C[Coordinator]
     DB[(State)]
 
     C --- DB
