@@ -1,7 +1,8 @@
 [workspace]
 resolver = "2"
 package.version = "0.1.0"
-metadata.crane.name = "blueprint-universe"
+package.license = "MIT OR Apache-2.0"
+metadata.crane.name = "nix-fleet"
 
 members = ["rust/*"]
 
