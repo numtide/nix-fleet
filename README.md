@@ -1,6 +1,6 @@
 # Nix(OS) fleet management
 
-This project aims to build robust and user-friendly fleet management tooling, tailored for asynchronously managing devices that are capable of and intended to run NixOS. It inherits its motivational roots from [NITS](https://github.com/numtide/nits).
+This project aims to build robust and user-friendly fleet management tooling, tailored for asynchronously managing devices that are capable of and intended to run NixOS. It inherits its motivational roots from [NITS][].
 
 ## Features \& Rationale
 The logical model encompasses Coordinators, Agents, and Admins. CI/CD systems are merged into the Admin category.
@@ -39,12 +39,16 @@ The assumption is that the devices are not capable of or it's undesired to build
 In this scenario it's redundant to evaluate again and there's already the need for a trusted signature for the binary cache. It's a low-hanging fruit to make the final closure the update payload, and transmit metadata to the devices that enables them to download and apply the update.
 
 ### Why a new tool?
-While the following tools provide pull-based updates, they rely on evaluation to take place on the updating device, and aren't architected to support the tri-component model this project is designed around.
+Nix-Fleet continues on the closely proximate [NITS][] experiment and puts a different technological spin on the principles by swapping Go and [NATS](https://nats.io/) for Rust and Iroh for a few reasons. To start with the most subjective, it's the general purpose programming language that the [initial author](https://github.com/steveej) has been enjoying most in recent years for application development. More objectively, it promises for easier integration with the Rust-based Iroh, [Snix](https://snix.dev/), and [NixOps4](https://github.com/nixops4/nixops4). All of which are promising integrations at various points down the line. Iroh has been selected for its native support for endpoint discovery in any network topology without the reliance on external overlay networking, and for its ease of building custom protocols on top of it.
 
-* [Bento](https://github.com/rapenne-s/bento): Written in Shell and intentionally kept simple. Not easily extensible/modular.
-* [Comin](https://github.com/nlewo/comin): Update daemon uses Git repositories as static remotes.
-* [npcnix](https://github.com/rustshop/npcnix): Update daemon uses AWS resources as static remote.
-* NixOS' native `system.autoUpgrade`: Just a shell script on a timer.
+Looking at the wider Nix ecosystem, there are open-source tools for pull-based updates that can provide valuable inspiration. The following list gives an analysis with counter indications that prevent each respective project to be a viable base for the architecture this project aims for. Please raise an issue or pull-request if you notice incorrect or missing important information.
+
+Project | Evaluation | Admin | Server | Agent
+--- | --- | --- | --- | ---
+[Bento](https://github.com/rapenne-s/bento) | on-device | Shell script | SFTP | same script as Admin on a systemd timer
+[Comin](https://github.com/nlewo/comin) | on-device | git commit/push | Git repository | Golang Agent Daemon periodically polls Git repositories
+[npcnix](https://github.com/rustshop/npcnix) | on-device | Rust CLI "packs" Nix Flake source and uploads it to S3 | (AWS) S3| Rust Agent Daemon polls Nix Flake from S3
+[NixOS' native `system.autoUpgrade`](https://search.nixos.org/options?channel=unstable&query=system.autoUpgrade) | on-device | All supported [Flake URL types](https://nix.dev/manual/nix/latest/command-ref/new-cli/nix3-flake#types) | depends on flake storage | Shell script on a timer
 
 ## Contributing
 
@@ -91,3 +95,8 @@ This project [is currently funded][nlnet-grant-1] through [NGI Fediversity Fund]
 ## License
 
 `SPDX-License-Identifier: MIT OR Apache-2.0`
+
+
+---
+
+[NITS]: https://github.com/numtide/nits
