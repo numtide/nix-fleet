@@ -26,7 +26,7 @@ let
     # Additional environment variables can be set directly
     # MY_CUSTOM_VAR = "some value";
 
-    meta.platforms = pkgs.lib.platforms.linux;
+    meta.platforms = pkgs.lib.platforms.linux ++ pkgs.lib.platforms.darwin;
   };
 
   # Build *just* the cargo dependencies (of the entire workspace),
