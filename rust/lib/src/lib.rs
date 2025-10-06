@@ -51,7 +51,7 @@ pub mod protocols {
 
     /// A simple protocol that will echo back the data to the sender.
     pub mod echo {
-        use std::future::Future;
+        
 
         use iroh::protocol::{AcceptError, ProtocolHandler};
         use tracing::debug;
@@ -70,36 +70,34 @@ pub mod protocols {
         }
 
         impl ProtocolHandler for Echo {
-            fn accept(
+            async fn accept(
                 &self,
                 connection: iroh::endpoint::Connection,
-            ) -> impl Future<Output = Result<(), AcceptError>> + Send {
-                async move {
-                    // Err(AcceptError::User {
-                    //     source: "not implemented".into(),
-                    // })
+            ) -> Result<(), AcceptError> {
+                // Err(AcceptError::User {
+                //     source: "not implemented".into(),
+                // })
 
-                    let remote_node_id = connection.remote_node_id()?;
-                    debug!("accepted connection from {remote_node_id}");
+                let remote_node_id = connection.remote_node_id()?;
+                debug!("accepted connection from {remote_node_id}");
 
-                    let (mut tx, mut rx) = connection.accept_bi().await?;
+                let (mut tx, mut rx) = connection.accept_bi().await?;
 
-                    let num_bytes_copied = tokio::io::copy(&mut rx, &mut tx).await?;
+                let num_bytes_copied = tokio::io::copy(&mut rx, &mut tx).await?;
 
-                    debug!("copied {num_bytes_copied} bytes");
+                debug!("copied {num_bytes_copied} bytes");
 
-                    tx.finish()?;
+                tx.finish()?;
 
-                    connection.closed().await;
+                connection.closed().await;
 
-                    Ok(())
-                }
+                Ok(())
             }
         }
     }
 
     pub mod node_admin {
-        use std::future::Future;
+        
 
         use iroh::protocol::{AcceptError, ProtocolHandler};
 
@@ -111,21 +109,19 @@ pub mod protocols {
         }
 
         impl ProtocolHandler for NodeAdmin {
-            fn accept(
+            async fn accept(
                 &self,
                 _connection: iroh::endpoint::Connection,
-            ) -> impl Future<Output = Result<(), AcceptError>> + Send {
-                async move {
-                    Err(AcceptError::User {
-                        source: "todo".into(),
-                    })
-                }
+            ) -> Result<(), AcceptError> {
+                Err(AcceptError::User {
+                    source: "todo".into(),
+                })
             }
         }
     }
 
     pub mod enroll_agent {
-        use std::future::Future;
+        
 
         use iroh::protocol::{AcceptError, ProtocolHandler};
 
@@ -137,15 +133,13 @@ pub mod protocols {
         }
 
         impl ProtocolHandler for EnrollAgent {
-            fn accept(
+            async fn accept(
                 &self,
                 _connection: iroh::endpoint::Connection,
-            ) -> impl Future<Output = Result<(), AcceptError>> + Send {
-                async move {
-                    Err(AcceptError::User {
-                        source: "todo".into(),
-                    })
-                }
+            ) -> Result<(), AcceptError> {
+                Err(AcceptError::User {
+                    source: "todo".into(),
+                })
             }
         }
     }
@@ -426,7 +420,7 @@ pub mod admin {
                             let mut tx_locked = tx.lock().await;
 
                             tx_locked
-                                .write_all(&msg.as_bytes())
+                                .write_all(msg.as_bytes())
                                 .await
                                 .context(format!("writing {} bytes to stream", msg.len()))?;
 
