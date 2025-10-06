@@ -1,5 +1,5 @@
 [package]
-name = "lib"
+name = "flt_lib"
 edition = "2021"
 version.workspace = true
 license.workspace = true

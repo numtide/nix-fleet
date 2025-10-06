@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{command, Parser, Subcommand};
 
-use lib::{
+use flt_lib::{
     admin::cli::{AdminArgs, AgentArgs},
     util::parse_openssh_ed25519_private,
 };
@@ -46,10 +46,10 @@ async fn main() -> anyhow::Result<()> {
     };
 
     match args.applet {
-        Applet::Coordinator => lib::coordinator::run(maybe_secret_key).await,
+        Applet::Coordinator => flt_lib::coordinator::run(maybe_secret_key).await,
         Applet::Agent(agent_args) => {
-            lib::agent::run(maybe_secret_key, agent_args.coordinators.into_boxed_slice()).await
+            flt_lib::agent::run(maybe_secret_key, agent_args.coordinators.into_boxed_slice()).await
         }
-        Applet::Admin(admin_args) => lib::admin::run(maybe_secret_key, admin_args).await,
+        Applet::Admin(admin_args) => flt_lib::admin::run(maybe_secret_key, admin_args).await,
     }
 }

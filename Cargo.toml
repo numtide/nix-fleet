@@ -2,7 +2,7 @@
 resolver = "2"
 package.version = "0.1.0"
 package.license = "MIT OR Apache-2.0"
-metadata.crane.name = "nix-fleet"
+metadata.crane.name = "flt"
 
 members = ["rust/*"]
 

@@ -1,11 +1,11 @@
 [package]
-name = "app"
+name = "flt"
 edition = "2021"
 version.workspace = true
 license.workspace = true
 
 [dependencies]
-lib = { path = "../lib" }
+flt_lib = { path = "../lib" }
 
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
