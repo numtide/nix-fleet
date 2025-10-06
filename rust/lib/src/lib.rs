@@ -505,8 +505,9 @@ mod tests {
     use super::*;
 
     use anyhow::Context;
-    use iroh::NodeId;
+    use iroh::{NodeId, SecretKey};
     use jsonpath_rust::JsonPath;
+    use rand::rngs::OsRng;
 
     struct TestKeyTuple {
         openssh_key: &'static str,
@@ -514,27 +515,27 @@ mod tests {
         pubkey: &'static str,
     }
 
-    // List of tuples of (Open SSH private keys, NodeId)
-    const TEST_KEYS: &[TestKeyTuple] = &[
-        TestKeyTuple {
-            openssh_key: include_str!("../../../fixtures/coordinator.ed25519"),
-            openssh_pubkey: include_str!("../../../fixtures/coordinator.ed25519.pub"),
-            pubkey: "ba48d5a18a06a0348511b83ef8e8b900ea653c43086e55613344cdd8192f7f6c",
-        },
-        TestKeyTuple {
-            openssh_key: include_str!("../../../fixtures/agent.ed25519"),
-            openssh_pubkey: include_str!("../../../fixtures/agent.ed25519.pub"),
-            pubkey: "976f02e6c46cd53189128d7b72ec1a2eeff05012130debefc7a5dab8d0744139",
-        },
-        TestKeyTuple {
-            openssh_key: include_str!("../../../fixtures/admin.ed25519"),
-            openssh_pubkey: include_str!("../../../fixtures/admin.ed25519.pub"),
-            pubkey: "7be5463aab9b1f0446ab70dbc883e0fd2b2da0a6a2a81dc3061e5c25ce4c4e94",
-        },
-    ];
-
     #[test]
     fn parses_openssh_key() {
+        // List of tuples of (Open SSH private keys, NodeId)
+        const TEST_KEYS: &[TestKeyTuple] = &[
+            TestKeyTuple {
+                openssh_key: include_str!("../../../fixtures/coordinator.ed25519"),
+                openssh_pubkey: include_str!("../../../fixtures/coordinator.ed25519.pub"),
+                pubkey: "ba48d5a18a06a0348511b83ef8e8b900ea653c43086e55613344cdd8192f7f6c",
+            },
+            TestKeyTuple {
+                openssh_key: include_str!("../../../fixtures/agent.ed25519"),
+                openssh_pubkey: include_str!("../../../fixtures/agent.ed25519.pub"),
+                pubkey: "976f02e6c46cd53189128d7b72ec1a2eeff05012130debefc7a5dab8d0744139",
+            },
+            TestKeyTuple {
+                openssh_key: include_str!("../../../fixtures/admin.ed25519"),
+                openssh_pubkey: include_str!("../../../fixtures/admin.ed25519.pub"),
+                pubkey: "7be5463aab9b1f0446ab70dbc883e0fd2b2da0a6a2a81dc3061e5c25ce4c4e94",
+            },
+        ];
+
         for TestKeyTuple {
             openssh_key,
             openssh_pubkey,
@@ -553,16 +554,19 @@ mod tests {
 
     #[tokio::test]
     async fn echo_completes() {
-        let _coordinator_handle = tokio::spawn(coordinator::run(Some(
-            parse_openssh_ed25519_private(TEST_KEYS[0].openssh_key.as_bytes()).unwrap(),
-        )));
+        let coordinator_key = iroh::SecretKey::generate(OsRng);
+        let coordinator_pubkey = coordinator_key.public();
 
+        let _coordinator_handle = tokio::spawn(coordinator::run(Some(coordinator_key)));
+
+        let admin_key = iroh::SecretKey::generate(OsRng);
+        let admin_pubkey = admin_key.public();
         tokio::spawn(admin::run(
-            Some(parse_openssh_ed25519_private(TEST_KEYS[2].openssh_key.as_bytes()).unwrap()),
+            Some(admin_key),
             AdminArgs {
                 cmd: AdminCmd::Echo {
                     number: 10,
-                    node_id: iroh::PublicKey::from_str(TEST_KEYS[0].pubkey).unwrap(),
+                    node_id: coordinator_pubkey,
                     msg: "hello".to_string(),
                     size: 1,
                     timeout: 0.1,
@@ -598,17 +602,21 @@ mod tests {
     #[ignore = "WIP"]
     #[tokio::test]
     async fn admin_can_list_agents_via_coordinator() {
+        let coordinator_key = SecretKey::generate(OsRng);
+        let coordinator_pubkey = coordinator_key.public();
+        let admin_key = SecretKey::generate(OsRng);
+        let admin_pubkey = admin_key.public();
+        let agent_key = SecretKey::generate(OsRng);
+        let agent_pubkey = agent_key.public();
+
         // Spawn the coordinator
-        tokio::spawn(coordinator::run(Some(
-            parse_openssh_ed25519_private(TEST_KEYS[0].openssh_key.as_bytes()).unwrap(),
-        )));
+        tokio::spawn(coordinator::run(Some(coordinator_key)));
 
         // spawn an agent that will talk to the coordinator
-
         tokio::spawn(agent::run(
-            Some(parse_openssh_ed25519_private(TEST_KEYS[1].openssh_key.as_bytes()).unwrap()),
+            Some(agent_key),
             // TODO
-            [iroh::PublicKey::from_str(TEST_KEYS[0].pubkey).unwrap()].into(),
+            [coordinator_pubkey].into(),
         ));
 
         {
@@ -618,7 +626,7 @@ mod tests {
             //
 
             let admin_future = admin::run(
-                Some(parse_openssh_ed25519_private(TEST_KEYS[2].openssh_key.as_bytes()).unwrap()),
+                Some(admin_key),
                 AdminArgs {
                     cmd: AdminCmd::ListAgents {
                         only_unassigned: false,
