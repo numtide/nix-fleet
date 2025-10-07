@@ -13,7 +13,11 @@
 }:
 let
   craneLib = flake.lib.mkCraneLib { inherit pkgs system; };
-  src = craneLib.cleanCargoSource flake;
+  src = pkgs.lib.cleanSourceWith {
+    src = flake;
+    filter =
+      path: type: (pkgs.lib.hasInfix "/fixtures/" path) || (craneLib.filterCargoSources path type);
+  };
   commonArgs = {
     inherit src;
     strictDeps = true;
@@ -69,8 +73,11 @@ craneLib.buildPackage (
         // {
           inherit cargoArtifacts;
 
+          RUST_BACKTRACE = 1;
+
           nativeBuildInputs = [
             # native test binaries go here
+            pkgs.facter
           ];
           partitions = 1;
           partitionType = "count";

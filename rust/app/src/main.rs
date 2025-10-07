@@ -4,7 +4,7 @@ use clap::{command, Parser, Subcommand};
 
 use flt_lib::{
     admin::cli::{AdminArgs, AgentArgs},
-    util::parse_openssh_ed25519_private,
+    util::{get_endpoint, parse_openssh_ed25519_private},
 };
 
 #[derive(Debug, Parser)]
@@ -45,11 +45,13 @@ async fn main() -> anyhow::Result<()> {
         ),
     };
 
+    let endpoint = get_endpoint(maybe_secret_key, None, Default::default()).await?;
+
     match args.applet {
-        Applet::Coordinator => flt_lib::coordinator::run(maybe_secret_key).await,
+        Applet::Coordinator => flt_lib::coordinator::run(endpoint).await,
         Applet::Agent(agent_args) => {
-            flt_lib::agent::run(maybe_secret_key, agent_args.coordinators.into_boxed_slice()).await
+            flt_lib::agent::run(endpoint, agent_args.coordinators.into_boxed_slice()).await
         }
-        Applet::Admin(admin_args) => flt_lib::admin::run(maybe_secret_key, admin_args).await,
+        Applet::Admin(admin_args) => flt_lib::admin::run(endpoint, admin_args).await,
     }
 }
