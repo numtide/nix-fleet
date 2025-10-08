@@ -737,8 +737,18 @@ mod tests {
 
             let maybe_kernel = js.query("$.kernel").unwrap().first().unwrap().as_str();
             assert_eq!(maybe_kernel, Some("Linux"), "{facter}");
+        } else if cfg!(target_os = "macos") {
+            assert_eq!(facts.os, platforms::OS::MacOS);
+            let facter = facts.maybe_facter.unwrap();
+
+            let js = serde_json::from_str::<serde_json::Value>(&facter)
+                .context(format!("parsing {facter}"))
+                .unwrap();
+
+            let maybe_kernel = js.query("$.kernel").unwrap().first().unwrap().as_str();
+            assert_eq!(maybe_kernel, Some("Darwin"), "{facter}");
         } else {
-            panic!("unsupported target os")
+            tracing::warn!("unsupported target os")
         }
     }
 
