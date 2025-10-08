@@ -75,10 +75,13 @@ craneLib.buildPackage (
 
           RUST_BACKTRACE = 1;
 
+          # native test binaries go here
           nativeBuildInputs = [
-            # native test binaries go here
             pkgs.facter
-          ];
+          ]
+          ++ (pkgs.lib.lists.optionals pkgs.stdenv.hostPlatform.isLinux [
+            pkgs.nixos-facter
+          ]);
           partitions = 1;
           partitionType = "count";
         }
