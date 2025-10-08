@@ -5,6 +5,7 @@ pub mod util {
     use std::str::FromStr;
 
     use anyhow::Context;
+    use iroh::endpoint::Builder;
     use iroh::{discovery::ConcurrentDiscovery, PublicKey, SecretKey, Watcher};
     use tokio::time;
     use url::Url;
@@ -51,7 +52,10 @@ pub mod util {
     pub enum Discoveries {
         None,
         Default,
-        Custom { secret_key: SecretKey, url: Url },
+        Custom {
+            secret_key: Box<SecretKey>,
+            url: Box<Url>,
+        },
     }
 
     impl Default for Discoveries {
@@ -76,9 +80,16 @@ pub mod util {
             // TODO: pursue a solution that works via HTTP relay in tests, which currently seems to be buggy
             // and uses HTTPS for probes against an HTTP server:
             // > 2025-10-07T19:29:17.665164Z DEBUG echo_completes:ep{me=3d4e9e47cb}:actor:reportgen.actor:run-probe{proto=Https delay=200ms relay_node=RelayNode { url: RelayUrl("http://127.0.0.1:45569/"), quic: None }}: iroh::net_report::reportgen: starting probe
-            if cfg!(test) {
-                builder = builder.insecure_skip_relay_cert_verify(true);
+            #[cfg(test)]
+            fn maybe_insecure_skip_relay_cert_verify(builder: Builder) -> Builder {
+                builder.insecure_skip_relay_cert_verify(true)
             }
+            #[cfg(not(test))]
+            fn maybe_insecure_skip_relay_cert_verify(builder: Builder) -> Builder {
+                builder
+            }
+
+            builder = maybe_insecure_skip_relay_cert_verify(builder);
         } else {
             builder = builder.relay_mode(iroh::RelayMode::Disabled);
         }
@@ -89,7 +100,7 @@ pub mod util {
 
                 builder = builder.add_discovery(
                     iroh::discovery::pkarr::PkarrPublisher::builder(pkarr_url.clone())
-                        .build(secret_key),
+                        .build(*secret_key),
                 );
 
                 builder = builder.add_discovery(
@@ -673,8 +684,8 @@ mod tests {
             Some(coordinator_key.clone()),
             relay_mode.clone(),
             util::Discoveries::Custom {
-                secret_key: coordinator_key,
-                url: iroh_dns_http_url.clone(),
+                secret_key: Box::new(coordinator_key),
+                url: iroh_dns_http_url.clone().into(),
             },
         )
         .await
@@ -688,8 +699,8 @@ mod tests {
             Some(admin_key.clone()),
             relay_mode.clone(),
             util::Discoveries::Custom {
-                secret_key: admin_key,
-                url: iroh_dns_http_url.clone(),
+                secret_key: admin_key.into(),
+                url: iroh_dns_http_url.clone().into(),
             },
         )
         .await
