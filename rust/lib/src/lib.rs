@@ -664,9 +664,20 @@ mod tests {
                 .unwrap();
         // TODO: switch to http and remove the insecure tls verification workaround
         let relay_url = relay_server.https_url().unwrap();
-        // TODO: why doesn't relay_url.into() not work here? i.e. the test fails with that
+        // TODO: why doesn't relay_url.into() not work here? i.e. the test fails with. this fails with:
+        // assert_eq!(
+        //     iroh::RelayMap::from(relay_url.clone()),
+        //     iroh::RelayNode {
+        //         url: relay_url.clone(),
+        //         quic: None,
+        //     }
+        //     .into()
+        // );
+        // left: RelayMap { nodes: {RelayUrl("https://127.0.0.1:46009/"): RelayNode { url: RelayUrl("https://127.0.0.1:46009/"), quic: Some(RelayQuicConfig { port: 7842 }) }} }
+        // right: RelayMap { nodes: {RelayUrl("https://127.0.0.1:46009/"): RelayNode { url: RelayUrl("https://127.0.0.1:46009/"), quic: None }} }
+        // note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
         let relay_map: iroh::RelayMap = iroh::RelayNode {
-            url: relay_url,
+            url: relay_url.into(),
             quic: None,
         }
         .into();
