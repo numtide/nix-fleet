@@ -9,9 +9,6 @@ pkgs.mkShell {
     flake.formatter.${system}
     pkgs.jq
     pkgs.nil
-
-    pkgs.facter
-    pkgs.nixos-facter
   ];
 
   # Add environment variables

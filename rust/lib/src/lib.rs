@@ -5,7 +5,10 @@ pub mod util {
     use std::str::FromStr;
 
     use anyhow::Context;
-    use iroh::{PublicKey, SecretKey};
+    use iroh::endpoint::Builder;
+    use iroh::{discovery::ConcurrentDiscovery, PublicKey, SecretKey, Watcher};
+    use tokio::time;
+    use url::Url;
 
     pub fn parse_openssh_ed25519_private(mut r: impl std::io::Read) -> anyhow::Result<SecretKey> {
         let mut raw = Vec::new();
@@ -44,6 +47,152 @@ pub mod util {
 
         Ok(PublicKey::from_bytes(&ssh_public_key_ed25519.0)?)
     }
+
+    #[derive(Debug, Clone)]
+    pub enum Discoveries {
+        None,
+        Default,
+        Custom {
+            secret_key: Box<SecretKey>,
+            url: Box<Url>,
+        },
+    }
+
+    impl Default for Discoveries {
+        fn default() -> Self {
+            Self::Default
+        }
+    }
+
+    pub async fn get_endpoint(
+        maybe_secret_key: Option<SecretKey>,
+        relay_mode: Option<iroh::RelayMode>,
+        discoveries: Discoveries,
+    ) -> anyhow::Result<iroh::Endpoint> {
+        let secret_key = maybe_secret_key.unwrap_or_else(|| SecretKey::generate(rand::rngs::OsRng));
+        let public_key = secret_key.public();
+
+        let mut builder = iroh::Endpoint::builder().secret_key(secret_key);
+
+        if let Some(relay_mode) = &relay_mode {
+            builder = builder.relay_mode(relay_mode.clone());
+
+            // TODO: pursue a solution that works via HTTP relay in tests, which currently seems to be buggy
+            // and uses HTTPS for probes against an HTTP server:
+            // > 2025-10-07T19:29:17.665164Z DEBUG echo_completes:ep{me=3d4e9e47cb}:actor:reportgen.actor:run-probe{proto=Https delay=200ms relay_node=RelayNode { url: RelayUrl("http://127.0.0.1:45569/"), quic: None }}: iroh::net_report::reportgen: starting probe
+            #[cfg(test)]
+            fn maybe_insecure_skip_relay_cert_verify(builder: Builder) -> Builder {
+                builder.insecure_skip_relay_cert_verify(true)
+            }
+            #[cfg(not(test))]
+            fn maybe_insecure_skip_relay_cert_verify(builder: Builder) -> Builder {
+                builder
+            }
+
+            builder = maybe_insecure_skip_relay_cert_verify(builder);
+        } else {
+            builder = builder.relay_mode(iroh::RelayMode::Disabled);
+        }
+
+        match discoveries {
+            Discoveries::Custom { secret_key, url } => {
+                let pkarr_url = url.join("/pkarr")?;
+
+                builder = builder.add_discovery(
+                    iroh::discovery::pkarr::PkarrPublisher::builder(pkarr_url.clone())
+                        .build(*secret_key),
+                );
+
+                builder = builder.add_discovery(
+                    iroh::discovery::pkarr::PkarrResolver::builder(pkarr_url.clone()).build(),
+                );
+            }
+            Discoveries::Default => {
+                let mut concurrent = ConcurrentDiscovery::empty();
+
+                match iroh::discovery::mdns::MdnsDiscovery::new(public_key, true) {
+                    Ok(mdns_discovery) => {
+                        concurrent.add(mdns_discovery);
+                    }
+                    Err(e) => tracing::warn!("error enabling mDNS discovery: {e}"),
+                };
+
+                #[cfg(not(test))]
+                concurrent.add(iroh::discovery::dns::DnsDiscovery::n0_dns().build());
+
+                builder = builder.discovery(concurrent);
+            }
+            Discoveries::None => {}
+        };
+
+        let endpoint = builder.bind().await?;
+
+        if let Some(relay_mode) = relay_mode {
+            tokio::time::timeout(
+                time::Duration::from_millis(500),
+                endpoint.home_relay().initialized(),
+            )
+            .await
+            .context(format!("waiting for home relay: {relay_mode:?}"))?;
+
+            // TODO:
+            // Endpoint::direct_addresses t
+        }
+
+        Ok(endpoint)
+    }
+
+    /// Spawn a server suitable for testing, while optionally enabling mainline with custom
+    /// bootstrap addresses.
+    #[cfg(test)]
+    pub async fn iroh_dns_spawn_for_tests_with_options() -> anyhow::Result<(
+        iroh_dns_server::http::HttpServer,
+        url::Url,
+        iroh_dns_server::dns::DnsServer,
+        std::net::SocketAddr,
+    )> {
+        use std::net::{IpAddr, Ipv4Addr};
+
+        let mut config = iroh_dns_server::config::Config::default();
+        config.dns.port = 0;
+        config.dns.bind_addr = Some(IpAddr::V4(Ipv4Addr::LOCALHOST));
+        config.http.as_mut().unwrap().port = 0;
+        config.http.as_mut().unwrap().bind_addr = Some(IpAddr::V4(Ipv4Addr::LOCALHOST));
+        config.https = None;
+        config.metrics = Some(iroh_dns_server::config::MetricsConfig::disabled());
+
+        let store = iroh_dns_server::ZoneStore::in_memory(Default::default(), Default::default())
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+        let dns_handler =
+            iroh_dns_server::dns::DnsHandler::new(store.clone(), &config.dns, Default::default())
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+        let state = iroh_dns_server::state::AppState {
+            store,
+            dns_handler,
+            metrics: Default::default(),
+        };
+
+        let http_server = iroh_dns_server::http::HttpServer::spawn(
+            config.http,
+            config.https,
+            config.pkarr_put_rate_limit,
+            state.clone(),
+        )
+        .await
+        .unwrap();
+
+        let dns_server =
+            iroh_dns_server::dns::DnsServer::spawn(config.dns, state.dns_handler.clone())
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+        let dns_addr = dns_server.local_addr();
+        let http_addr = http_server.http_addr().expect("http is set");
+        let http_url = format!("http://{http_addr}").parse::<url::Url>()?;
+        Ok((http_server, http_url, dns_server, dns_addr))
+    }
 }
 
 /// Protocol logic used on top of iroh
@@ -51,7 +200,6 @@ pub mod protocols {
 
     /// A simple protocol that will echo back the data to the sender.
     pub mod echo {
-        use std::future::Future;
 
         use iroh::protocol::{AcceptError, ProtocolHandler};
         use tracing::debug;
@@ -70,36 +218,29 @@ pub mod protocols {
         }
 
         impl ProtocolHandler for Echo {
-            fn accept(
+            async fn accept(
                 &self,
                 connection: iroh::endpoint::Connection,
-            ) -> impl Future<Output = Result<(), AcceptError>> + Send {
-                async move {
-                    // Err(AcceptError::User {
-                    //     source: "not implemented".into(),
-                    // })
+            ) -> Result<(), AcceptError> {
+                let remote_node_id = connection.remote_node_id()?;
+                debug!("accepted connection from {remote_node_id}");
 
-                    let remote_node_id = connection.remote_node_id()?;
-                    debug!("accepted connection from {remote_node_id}");
+                let (mut tx, mut rx) = connection.accept_bi().await?;
 
-                    let (mut tx, mut rx) = connection.accept_bi().await?;
+                let num_bytes_copied = tokio::io::copy(&mut rx, &mut tx).await?;
 
-                    let num_bytes_copied = tokio::io::copy(&mut rx, &mut tx).await?;
+                debug!("copied {num_bytes_copied} bytes");
 
-                    debug!("copied {num_bytes_copied} bytes");
+                tx.finish()?;
 
-                    tx.finish()?;
+                connection.closed().await;
 
-                    connection.closed().await;
-
-                    Ok(())
-                }
+                Ok(())
             }
         }
     }
 
     pub mod node_admin {
-        use std::future::Future;
 
         use iroh::protocol::{AcceptError, ProtocolHandler};
 
@@ -111,21 +252,18 @@ pub mod protocols {
         }
 
         impl ProtocolHandler for NodeAdmin {
-            fn accept(
+            async fn accept(
                 &self,
                 _connection: iroh::endpoint::Connection,
-            ) -> impl Future<Output = Result<(), AcceptError>> + Send {
-                async move {
-                    Err(AcceptError::User {
-                        source: "todo".into(),
-                    })
-                }
+            ) -> Result<(), AcceptError> {
+                Err(AcceptError::User {
+                    source: "todo".into(),
+                })
             }
         }
     }
 
     pub mod enroll_agent {
-        use std::future::Future;
 
         use iroh::protocol::{AcceptError, ProtocolHandler};
 
@@ -137,42 +275,29 @@ pub mod protocols {
         }
 
         impl ProtocolHandler for EnrollAgent {
-            fn accept(
+            async fn accept(
                 &self,
                 _connection: iroh::endpoint::Connection,
-            ) -> impl Future<Output = Result<(), AcceptError>> + Send {
-                async move {
-                    Err(AcceptError::User {
-                        source: "todo".into(),
-                    })
-                }
+            ) -> Result<(), AcceptError> {
+                Err(AcceptError::User {
+                    source: "todo".into(),
+                })
             }
         }
     }
 }
 
 /// This module implements the Coordinator functionality.
-/// It's expected to run on machines with high uptime, bandwidth, and reliability; a.k.a. servers.
+/// It's expected to run on machines with high uptime, bandwidth, and reliability; aka servers.
 pub mod coordinator {
-    use iroh::{protocol::Router, SecretKey, Watcher};
+    use iroh::{protocol::Router, Watcher};
     use tracing::info;
 
     use crate::protocols::{echo::Echo, enroll_agent::EnrollAgent, node_admin::NodeAdmin};
 
     /// Run the Coordinator.
     /// The only stop condition is currently either an error or Ctrl+C.
-    pub async fn run(maybe_secret_key: Option<SecretKey>) -> anyhow::Result<()> {
-        // Create an endpoint, it allows creating and accepting
-        // connections in the iroh p2p world
-        let endpoint = iroh::Endpoint::builder()
-            .secret_key(maybe_secret_key.unwrap_or_else(|| SecretKey::generate(rand::rngs::OsRng)))
-            .clear_discovery()
-            .discovery(iroh::discovery::mdns::MdnsDiscoveryBuilder)
-            .relay_mode(iroh::RelayMode::Disabled)
-            // .discovery_n0()
-            .bind()
-            .await?;
-
+    pub async fn run(endpoint: iroh::Endpoint) -> anyhow::Result<()> {
         let mut node_addr = endpoint.node_addr();
         let node_id = node_addr.initialized().await.node_id;
         let bind_info = endpoint.bound_sockets();
@@ -192,25 +317,14 @@ pub mod coordinator {
 }
 
 pub mod agent {
-    use iroh::{protocol::Router, PublicKey, SecretKey};
+    use iroh::{protocol::Router, PublicKey};
 
     use crate::protocols::{echo::Echo, node_admin::NodeAdmin};
 
     pub async fn run(
-        maybe_secret_key: Option<SecretKey>,
+        endpoint: iroh::Endpoint,
         _coordinators: Box<[PublicKey]>,
     ) -> anyhow::Result<()> {
-        // Create an endpoint, it allows creating and accepting
-        // connections in the iroh p2p world
-        let endpoint = iroh::Endpoint::builder()
-            .secret_key(maybe_secret_key.unwrap_or_else(|| SecretKey::generate(rand::rngs::OsRng)))
-            .clear_discovery()
-            .discovery(iroh::discovery::mdns::MdnsDiscoveryBuilder)
-            .relay_mode(iroh::RelayMode::Disabled)
-            // .discovery_n0()
-            .bind()
-            .await?;
-
         let router = Router::builder(endpoint)
             .accept(Echo::ALPN, Echo)
             .accept(NodeAdmin::ALPN, NodeAdmin)
@@ -233,7 +347,7 @@ pub mod facts {
     pub struct Facts {
         pub os: platforms::OS,
         pub os_info: os_info::Info,
-        pub mid: mid::MidData,
+        pub mid: Option<mid::MidData>,
         pub maybe_facter: Option<String>,
         pub maybe_nixos_facter: Option<String>,
     }
@@ -246,7 +360,9 @@ pub mod facts {
             let os = platforms::OS::from_str(std::env::consts::OS).context("determining OS")?;
 
             let os_info = os_info::get();
-            let mid_data = mid::data(MID_SEED).context("getting machine data")?;
+            let mid_data = mid::data(MID_SEED)
+                .map_err(|e| tracing::warn!("couldn't get machine machine data: {e}"))
+                .ok();
 
             let maybe_facter = tokio::task::spawn_blocking(|| {
                 better_commands::run(std::process::Command::new("facter").arg("--json"))
@@ -301,7 +417,6 @@ pub mod admin {
     use std::sync::Arc;
 
     use anyhow::Context;
-    use iroh::SecretKey;
     use tokio::time::Instant;
     use tracing::{info, trace};
 
@@ -366,23 +481,9 @@ pub mod admin {
         }
     }
 
-    /// Run the Agent.
+    /// Run the Admin command.
     /// The only stop condition is currently either an error or Ctrl+C.
-    pub async fn run(
-        maybe_secret_key: Option<SecretKey>,
-        admin_args: AdminArgs,
-    ) -> anyhow::Result<()> {
-        // Create an endpoint, it allows creating and accepting
-        // connections in the iroh p2p world
-        let endpoint = iroh::Endpoint::builder()
-            .secret_key(maybe_secret_key.unwrap_or_else(|| SecretKey::generate(rand::rngs::OsRng)))
-            .clear_discovery()
-            .relay_mode(iroh::RelayMode::Disabled)
-            .discovery(iroh::discovery::mdns::MdnsDiscoveryBuilder)
-            // .discovery_n0()
-            .bind()
-            .await?;
-
+    pub async fn run(endpoint: iroh::Endpoint, admin_args: AdminArgs) -> anyhow::Result<()> {
         match admin_args.cmd {
             cli::AdminCmd::Echo {
                 node_id,
@@ -426,7 +527,7 @@ pub mod admin {
                             let mut tx_locked = tx.lock().await;
 
                             tx_locked
-                                .write_all(&msg.as_bytes())
+                                .write_all(msg.as_bytes())
                                 .await
                                 .context(format!("writing {} bytes to stream", msg.len()))?;
 
@@ -499,15 +600,16 @@ mod tests {
 
     use crate::{
         admin::cli::{AdminArgs, AdminCmd},
-        util::parse_openssh_ed25519_private,
+        util::{get_endpoint, parse_openssh_ed25519_private, Discoveries},
     };
 
     use super::*;
 
     use anyhow::Context;
-    use iroh::{NodeId, SecretKey};
+    use iroh::{NodeId, RelayMode, SecretKey};
     use jsonpath_rust::JsonPath;
     use rand::rngs::OsRng;
+    use tracing_test::traced_test;
 
     struct TestKeyTuple {
         openssh_key: &'static str,
@@ -552,17 +654,59 @@ mod tests {
         }
     }
 
+    #[traced_test]
     #[tokio::test]
     async fn echo_completes() {
+        // run a local relay server
+        let relay_server =
+            iroh_relay::server::Server::spawn(iroh_relay::server::testing::server_config())
+                .await
+                .unwrap();
+        // TODO: switch to http and remove the insecure tls verification workaround
+        let relay_url = relay_server.https_url().unwrap();
+        // TODO: why doesn't relay_url.into() not work here? i.e. the test fails with that
+        let relay_map: iroh::RelayMap = iroh::RelayNode {
+            url: relay_url,
+            quic: None,
+        }
+        .into();
+        let relay_mode = Some(RelayMode::Custom(relay_map.clone()));
+
+        let (_iroh_dns_http_server, iroh_dns_http_url, _iroh_dns_server, iroh_dns_url) =
+            util::iroh_dns_spawn_for_tests_with_options().await.unwrap();
+
+        tracing::info!("test servers running:\nrelay: {relay_map}\niroh_dns_http: {iroh_dns_http_url}\niroh_dns: {iroh_dns_url}");
+
+        // coordinator
         let coordinator_key = iroh::SecretKey::generate(OsRng);
         let coordinator_pubkey = coordinator_key.public();
+        let coordinator_endpoint = get_endpoint(
+            Some(coordinator_key.clone()),
+            relay_mode.clone(),
+            util::Discoveries::Custom {
+                secret_key: Box::new(coordinator_key),
+                url: iroh_dns_http_url.clone().into(),
+            },
+        )
+        .await
+        .unwrap();
+        let _coordinator_handle = tokio::spawn(coordinator::run(coordinator_endpoint));
 
-        let _coordinator_handle = tokio::spawn(coordinator::run(Some(coordinator_key)));
-
+        // admin
         let admin_key = iroh::SecretKey::generate(OsRng);
-        let admin_pubkey = admin_key.public();
+        let _admin_pubkey = admin_key.public();
+        let admin_endpoint = get_endpoint(
+            Some(admin_key.clone()),
+            relay_mode.clone(),
+            util::Discoveries::Custom {
+                secret_key: admin_key.into(),
+                url: iroh_dns_http_url.clone().into(),
+            },
+        )
+        .await
+        .unwrap();
         tokio::spawn(admin::run(
-            Some(admin_key),
+            admin_endpoint,
             AdminArgs {
                 cmd: AdminCmd::Echo {
                     number: 10,
@@ -593,8 +737,18 @@ mod tests {
 
             let maybe_kernel = js.query("$.kernel").unwrap().first().unwrap().as_str();
             assert_eq!(maybe_kernel, Some("Linux"), "{facter}");
+        } else if cfg!(target_os = "macos") {
+            assert_eq!(facts.os, platforms::OS::MacOS);
+            let facter = facts.maybe_facter.unwrap();
+
+            let js = serde_json::from_str::<serde_json::Value>(&facter)
+                .context(format!("parsing {facter}"))
+                .unwrap();
+
+            let maybe_kernel = js.query("$.kernel").unwrap().first().unwrap().as_str();
+            assert_eq!(maybe_kernel, Some("Darwin"), "{facter}");
         } else {
-            panic!("unsupported target os")
+            tracing::warn!("unsupported target os")
         }
     }
 
@@ -605,16 +759,22 @@ mod tests {
         let coordinator_key = SecretKey::generate(OsRng);
         let coordinator_pubkey = coordinator_key.public();
         let admin_key = SecretKey::generate(OsRng);
-        let admin_pubkey = admin_key.public();
+        let _admin_pubkey = admin_key.public();
         let agent_key = SecretKey::generate(OsRng);
-        let agent_pubkey = agent_key.public();
+        let _agent_pubkey = agent_key.public();
 
         // Spawn the coordinator
-        tokio::spawn(coordinator::run(Some(coordinator_key)));
+        tokio::spawn(coordinator::run(
+            get_endpoint(Some(coordinator_key), None, Discoveries::default())
+                .await
+                .unwrap(),
+        ));
 
-        // spawn an agent that will talk to the coordinator
+        // Spawn an agent that will talk to the coordinator
         tokio::spawn(agent::run(
-            Some(agent_key),
+            get_endpoint(Some(agent_key), None, Discoveries::default())
+                .await
+                .unwrap(),
             // TODO
             [coordinator_pubkey].into(),
         ));
@@ -626,7 +786,9 @@ mod tests {
             //
 
             let admin_future = admin::run(
-                Some(admin_key),
+                get_endpoint(Some(admin_key), None, Discoveries::default())
+                    .await
+                    .unwrap(),
                 AdminArgs {
                     cmd: AdminCmd::ListAgents {
                         only_unassigned: false,
@@ -639,7 +801,7 @@ mod tests {
 
             tokio::select! {
                _ = admin_future => {
-                   // query coordinator for a list of agents
+                   // Query coordinator for a list of agents
                    // assert the list contains the expected agent
 
                    todo!("")

@@ -13,7 +13,11 @@
 }:
 let
   craneLib = flake.lib.mkCraneLib { inherit pkgs system; };
-  src = craneLib.cleanCargoSource flake;
+  src = pkgs.lib.cleanSourceWith {
+    src = flake;
+    filter =
+      path: type: (pkgs.lib.hasInfix "/fixtures/" path) || (craneLib.filterCargoSources path type);
+  };
   commonArgs = {
     inherit src;
     strictDeps = true;
@@ -26,7 +30,7 @@ let
     # Additional environment variables can be set directly
     # MY_CUSTOM_VAR = "some value";
 
-    meta.platforms = pkgs.lib.platforms.linux;
+    meta.platforms = pkgs.lib.platforms.linux ++ pkgs.lib.platforms.darwin;
   };
 
   # Build *just* the cargo dependencies (of the entire workspace),
@@ -69,9 +73,15 @@ craneLib.buildPackage (
         // {
           inherit cargoArtifacts;
 
+          RUST_BACKTRACE = 1;
+
+          # native test binaries go here
           nativeBuildInputs = [
-            # native test binaries go here
-          ];
+            pkgs.facter
+          ]
+          ++ (pkgs.lib.lists.optionals pkgs.stdenv.hostPlatform.isLinux [
+            pkgs.nixos-facter
+          ]);
           partitions = 1;
           partitionType = "count";
         }

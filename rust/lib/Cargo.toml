@@ -11,7 +11,7 @@ tokio = { workspace = true }
 rand = { workspace = true }
 clap = { workspace = true }
 
-iroh = { version = "0.91.2", features = ["discovery-local-network"] }
+iroh = { version = "0.92.0", features = ["discovery-local-network"] }
 serde = "1.0.219"
 serde_json = "1.0.143"
 mid = { version = "3.0.7", features = ["serde"] }
@@ -23,3 +23,10 @@ ssh-key = { version = "0.6.7", features = ["ed25519", "encryption"] }
 data-encoding = "2.9.0"
 tokio-util = { version = "0.7.16", features = ["io"] }
 blake3 = "1.8.2"
+url = "2.5.7"
+
+[dev-dependencies]
+tracing-test = { version = "0.2.5", features = ["no-env-filter"] }
+iroh = { version = "0.92.0", features = ["discovery-local-network", "test-utils"] }
+iroh-relay = { version = "0.92.0", features = [ "server", "test-utils" ] }
+iroh-dns-server = "0.92.0"
