@@ -54,7 +54,6 @@ Project | Evaluation | Admin | Server | Agent
 
 This project heavily relies on [Nix][nix] to provide a uniform developer workflow. It can be installed from [here][nix-install].
 
-
 ### Development Environment
 
 There's a Nix devShell definition with all Rust dependencies available at `.#devShells.${system}.rust`:
@@ -74,6 +73,13 @@ All tests that are run on CI can be run locally with Nix:
 ```
 nix flake check
 ```
+
+### Rust native testing
+
+There's a Rust test suite which can of course be run outside of Nix for quicker development iterations.
+Rust users will most likely be familiar with the vanilla `cargo test` command.
+
+In addition the development shell also comes with [cargo-nextest][] which can be used with `cargo nextest run`. The latter is used on CI in a Nix build context so using this locally comes closer to what is used on CI. The exception being that CI doesn't have access to the internet during test runtime.
 
 ### Nix Binary Cache
 The CI publishes its build outputs to [a public HTTP binary cache instance][cachix-numtide].
@@ -109,7 +115,6 @@ If you're on NixOS, you use the following in your configuration accordingly:
 ```
 
 Please see [the NixOS wiki entry on how to use a binary Cache](https://nixos.wiki/wiki/Binary_Cache#Using_a_binary_cache) for guides for more context.
-
 
 ### Repository Layout
 
@@ -162,3 +167,4 @@ This project [is currently funded][nlnet-grant-1] through [NGI Fediversity Fund]
 [cachix-numtide]: https://app.cachix.org/cache/numtide
 [nix]: https://nix.dev/manual/nix/2.32/
 [nix-install]: https://nixos.org/download/#download-nix
+[cargo-nextest]: https://nexte.st/

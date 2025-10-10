@@ -21,6 +21,7 @@ devShell
 direnv
 iroh
 n0
+nextest
 npcnix
 rustfmt
 substitutor
