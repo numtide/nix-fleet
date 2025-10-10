@@ -56,7 +56,7 @@ This project heavily relies on [Nix][nix] to provide a uniform developer workflo
 
 ### Development Environment
 
-There's a Nix devShell definition with all Rust dependencies available at `.#devShells.${system}.rust`:
+There's a Nix devShell definition with all Rust dependencies available at [`.#devShells.${system}.rust`](nix/devshells/rust.nix):
 
 ```
 nix develop .#rust
