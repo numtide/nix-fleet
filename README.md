@@ -90,7 +90,7 @@ The substitutor URL is `https://numtide.cachix.org` and the public key is `numti
 
 The cache has also been specified in the [flake.nix](flake.nix)' `nixConfig` attribute for the sake of communication. The practical effects of this apply only if you run `nix` as a [trusted user](https://nix.dev/manual/nix/2.32/command-ref/conf-file.html#conf-trusted-users), which has considerable security risks and is not recommended. Please carefully read the warning in the linked documentation for more context.
 
-You can use the Cachix CLI to configure the binary cache as described [at the cache site][cachix-numtide] itself.
+In a non-trusted user setup, the binary cache is thus configured on the system level.
 
 If you're on NixOS, you use the following in your configuration accordingly:
 
@@ -114,7 +114,16 @@ If you're on NixOS, you use the following in your configuration accordingly:
 }
 ```
 
-Please see [the NixOS wiki entry on how to use a binary Cache](https://nixos.wiki/wiki/Binary_Cache#Using_a_binary_cache) for guides for more context.
+Otherwise, of if you choose to configure the cache outside of the NixOS configuration, the system's Nix configuration at `/etc/nix/nix.conf` can be extended with the following:
+
+```ini
+extra-substituters = https://numtide.cachix.org
+extra-trusted-public-keys = numtide.cachix.org-1:2ps1kLBUWjxIneOy1Ik6cQjb41X0iXVXeHigGmycPPE=
+```
+
+There is some more guidance on this in the [nix.dev binary cache recipe](https://nix.dev/guides/recipes/add-binary-cache.html).
+
+You could also use the Cachix CLI to configure the binary cache as described [at the cache site][cachix-numtide] itself.
 
 ### Repository Layout
 
