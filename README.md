@@ -45,12 +45,85 @@ Looking at the wider Nix ecosystem, there are open-source tools for pull-based u
 
 Project | Evaluation | Admin | Server | Agent
 --- | --- | --- | --- | ---
-[Bento](https://github.com/rapenne-s/bento) | on-device | Shell script | SFTP | same script as Admin on a systemd timer
+[Bento](https://github.com/rapenne-s/bento) | on-device | Shell script | SFTP | Same script as Admin on a systemd timer
 [Comin](https://github.com/nlewo/comin) | on-device | git commit/push | Git repository | Golang Agent Daemon periodically polls Git repositories
 [npcnix](https://github.com/rustshop/npcnix) | on-device | Rust CLI "packs" Nix Flake source and uploads it to S3 | (AWS) S3| Rust Agent Daemon polls Nix Flake from S3
 [NixOS' native `system.autoUpgrade`](https://search.nixos.org/options?channel=unstable&query=system.autoUpgrade) | on-device | All supported [Flake URL types](https://nix.dev/manual/nix/latest/command-ref/new-cli/nix3-flake#types) | depends on flake storage | Shell script on a timer
 
 ## Contributing
+
+This project heavily relies on [Nix][nix] to provide a uniform developer workflow. It can be installed from [here][nix-install].
+
+### Development Environment
+
+There's a Nix devShell definition with all Rust dependencies available at [`.#devShells.${system}.rust`](nix/devshells/rust.nix):
+
+```
+nix develop .#rust
+```
+
+From here tools like `cargo` are provided and can be used with your favorite IDE.
+For an integrated experience there's a [direnv](https://direnv.net/) [configuration](.envrc) provided that automatically loads the Rust development shell.
+
+### CI Tests
+
+This project is set up to build in [Numtide's buildbot-nix instance](https://buildbot.numtide.com/#/projects/37).
+All tests that are run on CI can be run locally with Nix:
+
+```
+nix flake check
+```
+
+### Rust native testing
+
+There's a Rust test suite which can of course be run outside of Nix for quicker development iterations.
+Rust users will most likely be familiar with the vanilla `cargo test` command.
+
+In addition the development shell also comes with [cargo-nextest][] which can be used with `cargo nextest run`. The latter is used on CI in a Nix build context so using this locally comes closer to what is used on CI. With a notable exception being that CI doesn't have access to the internet during test runtime.
+
+### Nix Binary Cache
+The CI publishes its build outputs to [a public HTTP binary cache instance][cachix-numtide].
+
+Setting it up locally can speed deployment as well as some actions in local development by downloading pre-built dependencies.
+
+The substitutor URL is `https://numtide.cachix.org` and the public key is `numtide.cachix.org-1:2ps1kLBUWjxIneOy1Ik6cQjb41X0iXVXeHigGmycPPE=`.
+
+The cache has also been specified in the [flake.nix](flake.nix)' `nixConfig` attribute for the sake of communication. The practical effects of this apply only if you run `nix` as a [trusted user](https://nix.dev/manual/nix/2.32/command-ref/conf-file.html#conf-trusted-users), which has considerable security risks and is not recommended. Please carefully read the warning in the linked documentation for more context.
+
+In a non-trusted user setup, the binary cache is thus configured on the system level.
+
+If you're on NixOS, you use the following in your configuration accordingly:
+
+```nix
+# /etc/nixos/configuration.nix
+{
+  ...
+
+  nix = {
+    settings = {
+      substituters = [
+        "https://numtide.cachix.org"
+      ];
+      trusted-public-keys = [
+        "numtide.cachix.org-1:2ps1kLBUWjxIneOy1Ik6cQjb41X0iXVXeHigGmycPPE="
+      ];
+    };
+  };
+
+  ...
+}
+```
+
+Otherwise, of if you choose to configure the cache outside of the NixOS configuration, the system's Nix configuration at `/etc/nix/nix.conf` can be extended with the following:
+
+```ini
+extra-substituters = https://numtide.cachix.org
+extra-trusted-public-keys = numtide.cachix.org-1:2ps1kLBUWjxIneOy1Ik6cQjb41X0iXVXeHigGmycPPE=
+```
+
+There is some more guidance on this in the [nix.dev binary cache recipe](https://nix.dev/guides/recipes/add-binary-cache.html).
+
+You could also use the Cachix CLI to configure the binary cache as described [at the cache site][cachix-numtide] itself.
 
 ### Repository Layout
 
@@ -100,3 +173,7 @@ This project [is currently funded][nlnet-grant-1] through [NGI Fediversity Fund]
 ---
 
 [NITS]: https://github.com/numtide/nits
+[cachix-numtide]: https://app.cachix.org/cache/numtide
+[nix]: https://nix.dev/manual/nix/2.32/
+[nix-install]: https://nixos.org/download/#download-nix
+[cargo-nextest]: https://nexte.st/
