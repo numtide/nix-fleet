@@ -1,10 +1,16 @@
 words = [
     "alpn",
+    "cachix",
     "facter",
+    "lnet",
     "natively",
     "nixos",
+    "nlnet",
+    "numtide",
     "openssh",
     "rtt",
+    "substituters",
+    "substitutor",
     "uptime",
     "wip",
 ]

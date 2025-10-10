@@ -25,4 +25,13 @@
       # change this if unfree software is required.
       nixpkgs.config.allowUnfree = false;
     };
+
+  nixConfig = {
+    extra-substituters = [
+      "https://numtide.cachix.org"
+    ];
+    extra-trusted-public-keys = [
+      "numtide.cachix.org-1:2ps1kLBUWjxIneOy1Ik6cQjb41X0iXVXeHigGmycPPE="
+    ];
+  };
 }
