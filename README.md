@@ -84,7 +84,7 @@ In addition the development shell also comes with [cargo-nextest][] which can be
 ### Nix Binary Cache
 The CI publishes its build outputs to [a public HTTP binary cache instance][cachix-numtide].
 
-Setting it up locally can speed deployment as well as some actions in local development by downloading pre-built dependencies.
+Configuring your local Nix to use it can speed deployment as well as some actions in local development by downloading pre-built dependencies.
 
 The substitutor URL is `https://numtide.cachix.org` and the public key is `numtide.cachix.org-1:2ps1kLBUWjxIneOy1Ik6cQjb41X0iXVXeHigGmycPPE=`.
 
@@ -92,7 +92,7 @@ The cache has also been specified in the [flake.nix](flake.nix)' `nixConfig` att
 
 In a non-trusted user setup, the binary cache is thus configured on the system level.
 
-If you're on NixOS, you use the following in your configuration accordingly:
+If you're on NixOS, you can use the following snippet in your configuration accordingly:
 
 ```nix
 # /etc/nixos/configuration.nix
