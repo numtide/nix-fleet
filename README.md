@@ -79,7 +79,7 @@ nix flake check
 There's a Rust test suite which can of course be run outside of Nix for quicker development iterations.
 Rust users will most likely be familiar with the vanilla `cargo test` command.
 
-In addition the development shell also comes with [cargo-nextest][] which can be used with `cargo nextest run`. The latter is used on CI in a Nix build context so using this locally comes closer to what is used on CI. The exception being that CI doesn't have access to the internet during test runtime.
+In addition the development shell also comes with [cargo-nextest][] which can be used with `cargo nextest run`. The latter is used on CI in a Nix build context so using this locally comes closer to what is used on CI. With a notable exception being that CI doesn't have access to the internet during test runtime.
 
 ### Nix Binary Cache
 The CI publishes its build outputs to [a public HTTP binary cache instance][cachix-numtide].
