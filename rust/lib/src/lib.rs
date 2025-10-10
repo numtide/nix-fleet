@@ -677,7 +677,7 @@ mod tests {
         // right: RelayMap { nodes: {RelayUrl("https://127.0.0.1:46009/"): RelayNode { url: RelayUrl("https://127.0.0.1:46009/"), quic: None }} }
         // note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
         let relay_map: iroh::RelayMap = iroh::RelayNode {
-            url: relay_url.into(),
+            url: relay_url,
             quic: None,
         }
         .into();
