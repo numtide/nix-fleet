@@ -9,6 +9,9 @@ At its core it's a P2P framework that provides resilient connectivity between no
 * [iroh-gossip](https://www.iroh.computer/proto/iroh-gossip): Gossip protocol based on epidemic broadcast trees to disseminate messages among a swarm of peers interested in a topic.
 * [iroh-docs](https://www.iroh.computer/proto/iroh-docs): Builds on the blobs and gossip protocol and features multi-dimensional key-value documents with an efficient synchronization protocol.
 
+### Testing
+* tokio native helper to simulate various network conditions: https://crates.io/crates/tokio-netem
+
 ## Authentication && Authorization
 
 ### ed25519 keys

@@ -6,8 +6,7 @@ pub mod util {
 
     use anyhow::Context;
     use iroh::endpoint::Builder;
-    use iroh::{discovery::ConcurrentDiscovery, PublicKey, SecretKey, Watcher};
-    use tokio::time;
+    use iroh::{discovery::ConcurrentDiscovery, PublicKey, SecretKey};
     use url::Url;
 
     pub fn parse_openssh_ed25519_private(mut r: impl std::io::Read) -> anyhow::Result<SecretKey> {
@@ -69,7 +68,7 @@ pub mod util {
         relay_mode: Option<iroh::RelayMode>,
         discoveries: Discoveries,
     ) -> anyhow::Result<iroh::Endpoint> {
-        let secret_key = maybe_secret_key.unwrap_or_else(|| SecretKey::generate(rand::rngs::OsRng));
+        let secret_key = maybe_secret_key.unwrap_or_else(|| SecretKey::generate(&mut rand::rng()));
         let public_key = secret_key.public();
 
         let mut builder = iroh::Endpoint::builder().secret_key(secret_key);
@@ -77,9 +76,7 @@ pub mod util {
         if let Some(relay_mode) = &relay_mode {
             builder = builder.relay_mode(relay_mode.clone());
 
-            // TODO: pursue a solution that works via HTTP relay in tests, which currently seems to be buggy
-            // and uses HTTPS for probes against an HTTP server:
-            // > 2025-10-07T19:29:17.665164Z DEBUG echo_completes:ep{me=3d4e9e47cb}:actor:reportgen.actor:run-probe{proto=Https delay=200ms relay_node=RelayNode { url: RelayUrl("http://127.0.0.1:45569/"), quic: None }}: iroh::net_report::reportgen: starting probe
+            // TODO: Fix HTTP relay in tests (buggy HTTPS probes against HTTP server)
             #[cfg(test)]
             fn maybe_insecure_skip_relay_cert_verify(builder: Builder) -> Builder {
                 builder.insecure_skip_relay_cert_verify(true)
@@ -108,9 +105,12 @@ pub mod util {
                 );
             }
             Discoveries::Default => {
-                let mut concurrent = ConcurrentDiscovery::empty();
+                let concurrent = ConcurrentDiscovery::empty();
 
-                match iroh::discovery::mdns::MdnsDiscovery::new(public_key, true) {
+                match iroh::discovery::mdns::MdnsDiscovery::builder()
+                    .advertise(true)
+                    .build(public_key)
+                {
                     Ok(mdns_discovery) => {
                         concurrent.add(mdns_discovery);
                     }
@@ -128,15 +128,9 @@ pub mod util {
         let endpoint = builder.bind().await?;
 
         if let Some(relay_mode) = relay_mode {
-            tokio::time::timeout(
-                time::Duration::from_millis(500),
-                endpoint.home_relay().initialized(),
-            )
-            .await
-            .context(format!("waiting for home relay: {relay_mode:?}"))?;
-
-            // TODO:
-            // Endpoint::direct_addresses t
+            tokio::time::timeout(tokio::time::Duration::from_millis(500), endpoint.online())
+                .await
+                .context(format!("waiting for home relay: {relay_mode:?}"))?;
         }
 
         Ok(endpoint)
@@ -200,21 +194,148 @@ pub mod protocols {
 
     /// A simple protocol that will echo back the data to the sender.
     pub mod echo {
+        use std::sync::Arc;
+
+        use anyhow::Context;
 
         use iroh::protocol::{AcceptError, ProtocolHandler};
-        use tracing::debug;
+        use tokio::time::Instant;
+        use tracing::{debug, info, trace};
 
         #[derive(Debug)]
         pub struct Echo;
 
         impl Echo {
             pub const ALPN: &[u8] = b"nix-fleet/echo/0";
+
+            pub async fn send(
+                &self,
+                endpoint: iroh::Endpoint,
+                EchoSendArgs {
+                    number,
+                    node_id,
+                    size,
+                    timeout,
+                    msg,
+                }: EchoSendArgs,
+            ) -> anyhow::Result<()> {
+                let connection = endpoint
+                    .connect(node_id, crate::protocols::echo::Echo::ALPN)
+                    .await
+                    .context(format!("connecting to {node_id}"))?;
+
+                let mut msg = msg.repeat(size / msg.len() + (size % msg.len()));
+                msg.truncate(size);
+                let msg = msg;
+
+                let msg_hash = blake3::Hasher::new()
+                    .update(msg.as_bytes())
+                    .finalize()
+                    .to_string();
+
+                let msg = std::sync::Arc::new(msg);
+
+                let (tx, mut rx) = connection.open_bi().await?;
+
+                let tx = std::sync::Arc::new(tokio::sync::Mutex::new(tx));
+
+                for i in 0..number {
+                    let t_0 = Instant::now();
+
+                    trace!("[{i}] writing ({:e} bytes) to stream", msg.len());
+
+                    // The protocol requires the sender to start receiving back immediately or else it will stall.
+                    tokio::spawn({
+                        let msg = std::sync::Arc::clone(&msg);
+
+                        let tx = Arc::clone(&tx);
+
+                        async move {
+                            let mut tx_locked = tx.lock().await;
+
+                            tx_locked
+                                .write_all(msg.as_bytes())
+                                .await
+                                .context(format!("writing {} bytes to stream", msg.len()))?;
+
+                            trace!("[{i}] wrote ({:e} bytes) to stream", msg.len());
+
+                            anyhow::Ok(())
+                        }
+                    });
+
+                    let mut reader_future = async || {
+                        let mut len = 0;
+
+                        let mut hasher = blake3::Hasher::new();
+
+                        while let Some(chunk) = rx.read_chunk(1024 * 1024, true).await? {
+                            len += chunk.bytes.len();
+                            hasher.update(&chunk.bytes);
+
+                            if len == msg.len() {
+                                break;
+                            }
+                        }
+
+                        let hash = hasher.finalize().to_string();
+
+                        anyhow::Ok((hash, len))
+                    };
+
+                    trace!("[{i}] waiting for an answer..");
+                    tokio::select! {
+                        read_result = reader_future() => {
+                            let (hash, len) = read_result?;
+
+                            trace!("read {len} bytes from stream");
+
+                            let rtt = Instant::now().duration_since(t_0);
+
+                            anyhow::ensure!(msg_hash == hash, format!("[{i}] hash mismatch"));
+
+                            // The data is sent once in each direction
+                            let b_s =
+                                2. * msg.len() as f64
+                                /
+                                (rtt.as_secs_f64() * 1024. * 1024.)
+                                ;
+
+                            info!("[{i}] completed within {rtt:#?} at {b_s:.4} MiB/s" );
+                        },
+
+                        _ = tokio::time::sleep(std::time::Duration::from_secs_f64(timeout)) => {
+                            anyhow::bail!("timeout");
+                        }
+                    }
+                }
+
+                connection.close(0u32.into(), b"finished");
+
+                Ok(())
+            }
         }
 
-        impl Echo {
-            pub fn send() -> anyhow::Result<()> {
-                todo!("move the admin code here")
-            }
+        #[derive(Clone, Debug, clap::Parser)]
+        pub struct EchoSendArgs {
+            /// Number of times the message is sent and expected to come back.
+            #[arg(short, long, default_value_t = 1)]
+            pub(crate) number: usize,
+
+            /// The NodeId to send the message to.
+            pub(crate) node_id: iroh::PublicKey,
+
+            /// Effective message size in bytes, achieved by repeating the `msg`'s content.
+            #[arg(long, default_value_t = 1024)]
+            pub(crate) size: usize,
+
+            /// Timeout in seconds for each echo round.
+            #[arg(long, default_value_t = 0.1)]
+            pub(crate) timeout: f64,
+
+            /// The message that will be sent
+            #[arg(default_value = "nix-fleet")]
+            pub(crate) msg: String,
         }
 
         impl ProtocolHandler for Echo {
@@ -236,6 +357,35 @@ pub mod protocols {
                 connection.closed().await;
 
                 Ok(())
+            }
+        }
+    }
+
+    pub mod enrollment {
+        use iroh::protocol::{AcceptError, ProtocolHandler};
+        use tracing::info;
+
+        #[derive(Debug)]
+        pub struct Enrollment;
+
+        impl Enrollment {
+            pub const ALPN: &[u8] = b"nix-fleet/enrollment/0";
+        }
+
+        impl ProtocolHandler for Enrollment {
+            async fn accept(
+                &self,
+                connection: iroh::endpoint::Connection,
+            ) -> Result<(), AcceptError> {
+                let remote_node_id =
+                    connection.remote_node_id().map_err(|e| AcceptError::User {
+                        source: format!("failed to get remote node id: {e}").into(),
+                    })?;
+                info!("accepted enrollment connection from {remote_node_id}");
+
+                Err(anyhow::anyhow!("this is not implemented")
+                    .into_boxed_dyn_error()
+                    .into())
             }
         }
     }
@@ -262,51 +412,27 @@ pub mod protocols {
             }
         }
     }
-
-    pub mod enroll_agent {
-
-        use iroh::protocol::{AcceptError, ProtocolHandler};
-
-        #[derive(Debug)]
-        pub struct EnrollAgent;
-
-        impl EnrollAgent {
-            pub const ALPN: &[u8] = b"nix-fleet/enroll-agent/0";
-        }
-
-        impl ProtocolHandler for EnrollAgent {
-            async fn accept(
-                &self,
-                _connection: iroh::endpoint::Connection,
-            ) -> Result<(), AcceptError> {
-                Err(AcceptError::User {
-                    source: "todo".into(),
-                })
-            }
-        }
-    }
 }
 
 /// This module implements the Coordinator functionality.
 /// It's expected to run on machines with high uptime, bandwidth, and reliability; aka servers.
 pub mod coordinator {
-    use iroh::{protocol::Router, Watcher};
+    use iroh::protocol::Router;
     use tracing::info;
 
-    use crate::protocols::{echo::Echo, enroll_agent::EnrollAgent, node_admin::NodeAdmin};
+    use crate::protocols::{echo::Echo, enrollment::Enrollment, node_admin::NodeAdmin};
 
     /// Run the Coordinator.
     /// The only stop condition is currently either an error or Ctrl+C.
     pub async fn run(endpoint: iroh::Endpoint) -> anyhow::Result<()> {
-        let mut node_addr = endpoint.node_addr();
-        let node_id = node_addr.initialized().await.node_id;
+        let node_id = endpoint.node_id();
         let bind_info = endpoint.bound_sockets();
         info!("node_id: {node_id}; listening on {bind_info:?}");
 
         let router = Router::builder(endpoint)
             .accept(Echo::ALPN, Echo)
             .accept(NodeAdmin::ALPN, NodeAdmin)
-            .accept(EnrollAgent::ALPN, EnrollAgent)
+            .accept(Enrollment::ALPN, Enrollment)
             .spawn();
 
         tokio::signal::ctrl_c().await?;
@@ -414,17 +540,10 @@ pub mod facts {
 }
 
 pub mod admin {
-    use std::sync::Arc;
-
-    use anyhow::Context;
-    use tokio::time::Instant;
-    use tracing::{info, trace};
-
-    use crate::{admin::cli::AdminArgs, protocols};
+    use crate::admin::cli::AdminArgs;
 
     pub mod cli {
         use clap::{Args, Subcommand};
-        use iroh::PublicKey;
 
         /// Definition for the top-level Agent command
         #[derive(Debug, Clone, Args)]
@@ -453,24 +572,8 @@ pub mod admin {
         pub enum AdminCmd {
             /// Send a message to the node with the PublicKey
             Echo {
-                /// Number of times the message is sent and expected to come back.
-                #[arg(short, long, default_value_t = 1)]
-                number: usize,
-
-                /// The NodeId to send the message to.
-                node_id: PublicKey,
-
-                /// Effective message size in bytes, achieved by repeating the `msg`'s content.
-                #[arg(long, default_value_t = 1024)]
-                size: usize,
-
-                /// Timeout in seconds for each echo round.
-                #[arg(long, default_value_t = 0.1)]
-                timeout: f64,
-
-                /// The message that will be sent
-                #[arg(default_value = "nix-fleet")]
-                msg: String,
+                #[command(flatten)]
+                args: crate::protocols::echo::EchoSendArgs,
             },
 
             /// Retrieve a list of agents
@@ -485,105 +588,10 @@ pub mod admin {
     /// The only stop condition is currently either an error or Ctrl+C.
     pub async fn run(endpoint: iroh::Endpoint, admin_args: AdminArgs) -> anyhow::Result<()> {
         match admin_args.cmd {
-            cli::AdminCmd::Echo {
-                node_id,
-                msg,
-                number,
-                size,
-                timeout,
-            } => {
-                let connection = endpoint
-                    .connect(node_id, protocols::echo::Echo::ALPN)
-                    .await
-                    .context(format!("connecting to {node_id}"))?;
+            cli::AdminCmd::Echo { args } => {
+                let echo = crate::protocols::echo::Echo;
 
-                let mut msg = msg.repeat(size / msg.len() + (size % msg.len()));
-                msg.truncate(size);
-                let msg = msg;
-
-                let msg_hash = blake3::Hasher::new()
-                    .update(msg.as_bytes())
-                    .finalize()
-                    .to_string();
-
-                let msg = std::sync::Arc::new(msg);
-
-                let (tx, mut rx) = connection.open_bi().await?;
-
-                let tx = std::sync::Arc::new(tokio::sync::Mutex::new(tx));
-
-                for i in 0..number {
-                    let t_0 = Instant::now();
-
-                    trace!("[{i}] writing ({:e} bytes) to stream", msg.len());
-
-                    // The protocol requires the sender to start receiving back immediately or else it will stall.
-                    tokio::spawn({
-                        let msg = std::sync::Arc::clone(&msg);
-
-                        let tx = Arc::clone(&tx);
-
-                        async move {
-                            let mut tx_locked = tx.lock().await;
-
-                            tx_locked
-                                .write_all(msg.as_bytes())
-                                .await
-                                .context(format!("writing {} bytes to stream", msg.len()))?;
-
-                            trace!("[{i}] wrote ({:e} bytes) to stream", msg.len());
-
-                            anyhow::Ok(())
-                        }
-                    });
-
-                    let mut reader_future = async || {
-                        let mut len = 0;
-
-                        let mut hasher = blake3::Hasher::new();
-
-                        while let Some(chunk) = rx.read_chunk(1024 * 1024, true).await? {
-                            len += chunk.bytes.len();
-                            hasher.update(&chunk.bytes);
-
-                            if len == msg.len() {
-                                break;
-                            }
-                        }
-
-                        let hash = hasher.finalize().to_string();
-
-                        anyhow::Ok((hash, len))
-                    };
-
-                    trace!("[{i}] waiting for an answer..");
-                    tokio::select! {
-                        read_result = reader_future() => {
-                            let (hash, len) = read_result?;
-
-                            trace!("read {len} bytes from stream");
-
-                            let rtt = Instant::now().duration_since(t_0);
-
-                            anyhow::ensure!(msg_hash == hash, format!("[{i}] hash mismatch"));
-
-                            // The data is sent once in each direction
-                            let b_s =
-                                2. * msg.len() as f64
-                                /
-                                (rtt.as_secs_f64() * 1024. * 1024.)
-                                ;
-
-                            info!("[{i}] completed within {rtt:#?} at {b_s:.4} MiB/s" );
-                        },
-
-                        _ = tokio::time::sleep(std::time::Duration::from_secs_f64(timeout)) => {
-                            anyhow::bail!("timeout");
-                        }
-                    }
-                }
-
-                connection.close(0u32.into(), b"finished");
+                echo.send(endpoint, args).await?;
             }
             cli::AdminCmd::ListAgents { .. } => {
                 todo!("")
@@ -596,6 +604,7 @@ pub mod admin {
 
 #[cfg(test)]
 mod tests {
+    use crate::protocols::echo::EchoSendArgs;
     use std::{str::FromStr, time::Duration};
 
     use crate::{
@@ -608,7 +617,6 @@ mod tests {
     use anyhow::Context;
     use iroh::{NodeId, RelayMode, SecretKey};
     use jsonpath_rust::JsonPath;
-    use rand::rngs::OsRng;
     use tracing_test::traced_test;
 
     struct TestKeyTuple {
@@ -662,9 +670,9 @@ mod tests {
             iroh_relay::server::Server::spawn(iroh_relay::server::testing::server_config())
                 .await
                 .unwrap();
-        // TODO: switch to http and remove the insecure tls verification workaround
+        // TODO: switch to http and remove the insecure TLS verification workaround
         let relay_url = relay_server.https_url().unwrap();
-        // TODO: why doesn't relay_url.into() not work here? i.e. the test fails with. this fails with:
+        // TODO: why doesn't relay_url.into() not work here? I.e. the test fails with. This fails with:
         // assert_eq!(
         //     iroh::RelayMap::from(relay_url.clone()),
         //     iroh::RelayNode {
@@ -689,7 +697,7 @@ mod tests {
         tracing::info!("test servers running:\nrelay: {relay_map}\niroh_dns_http: {iroh_dns_http_url}\niroh_dns: {iroh_dns_url}");
 
         // coordinator
-        let coordinator_key = iroh::SecretKey::generate(OsRng);
+        let coordinator_key = iroh::SecretKey::generate(&mut rand::rng());
         let coordinator_pubkey = coordinator_key.public();
         let coordinator_endpoint = get_endpoint(
             Some(coordinator_key.clone()),
@@ -704,7 +712,7 @@ mod tests {
         let _coordinator_handle = tokio::spawn(coordinator::run(coordinator_endpoint));
 
         // admin
-        let admin_key = iroh::SecretKey::generate(OsRng);
+        let admin_key = iroh::SecretKey::generate(&mut rand::rng());
         let _admin_pubkey = admin_key.public();
         let admin_endpoint = get_endpoint(
             Some(admin_key.clone()),
@@ -720,11 +728,13 @@ mod tests {
             admin_endpoint,
             AdminArgs {
                 cmd: AdminCmd::Echo {
-                    number: 10,
-                    node_id: coordinator_pubkey,
-                    msg: "hello".to_string(),
-                    size: 1,
-                    timeout: 0.1,
+                    args: EchoSendArgs {
+                        number: 10,
+                        node_id: coordinator_pubkey,
+                        msg: "hello".to_string(),
+                        size: 1,
+                        timeout: 0.1,
+                    },
                 },
                 coordinators: vec![],
             },
@@ -767,15 +777,15 @@ mod tests {
     #[ignore = "WIP"]
     #[tokio::test]
     async fn admin_can_list_agents_via_coordinator() {
-        let coordinator_key = SecretKey::generate(OsRng);
+        let coordinator_key = SecretKey::generate(&mut rand::rng());
         let coordinator_pubkey = coordinator_key.public();
-        let admin_key = SecretKey::generate(OsRng);
+        let admin_key = SecretKey::generate(&mut rand::rng());
         let _admin_pubkey = admin_key.public();
-        let agent_key = SecretKey::generate(OsRng);
+        let agent_key = SecretKey::generate(&mut rand::rng());
         let _agent_pubkey = agent_key.public();
 
         // Spawn the coordinator
-        tokio::spawn(coordinator::run(
+        let _coordinator_handle = tokio::spawn(coordinator::run(
             get_endpoint(Some(coordinator_key), None, Discoveries::default())
                 .await
                 .unwrap(),
