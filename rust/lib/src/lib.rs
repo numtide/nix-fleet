@@ -47,20 +47,15 @@ pub mod util {
         Ok(PublicKey::from_bytes(&ssh_public_key_ed25519.0)?)
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Default)]
     pub enum Discoveries {
         None,
+        #[default]
         Default,
         Custom {
             secret_key: Box<SecretKey>,
             url: Box<Url>,
         },
-    }
-
-    impl Default for Discoveries {
-        fn default() -> Self {
-            Self::Default
-        }
     }
 
     pub async fn get_endpoint(
