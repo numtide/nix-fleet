@@ -90,12 +90,12 @@ pub mod util {
             Discoveries::Custom { secret_key, url } => {
                 let pkarr_url = url.join("/pkarr")?;
 
-                builder = builder.add_discovery(
+                builder = builder.discovery(
                     iroh::discovery::pkarr::PkarrPublisher::builder(pkarr_url.clone())
                         .build(*secret_key),
                 );
 
-                builder = builder.add_discovery(
+                builder = builder.discovery(
                     iroh::discovery::pkarr::PkarrResolver::builder(pkarr_url.clone()).build(),
                 );
             }
@@ -338,7 +338,7 @@ pub mod protocols {
                 &self,
                 connection: iroh::endpoint::Connection,
             ) -> Result<(), AcceptError> {
-                let remote_node_id = connection.remote_node_id()?;
+                let remote_node_id = connection.remote_id();
                 debug!("accepted connection from {remote_node_id}");
 
                 let (mut tx, mut rx) = connection.accept_bi().await?;
@@ -372,15 +372,13 @@ pub mod protocols {
                 &self,
                 connection: iroh::endpoint::Connection,
             ) -> Result<(), AcceptError> {
-                let remote_node_id =
-                    connection.remote_node_id().map_err(|e| AcceptError::User {
-                        source: format!("failed to get remote node id: {e}").into(),
-                    })?;
+                let remote_node_id = connection.remote_id();
                 info!("accepted enrollment connection from {remote_node_id}");
 
-                Err(anyhow::anyhow!("this is not implemented")
-                    .into_boxed_dyn_error()
-                    .into())
+                Err(AcceptError::User {
+                    source: "this is not implemented".into(),
+                    meta: Default::default(),
+                })
             }
         }
     }
@@ -403,6 +401,7 @@ pub mod protocols {
             ) -> Result<(), AcceptError> {
                 Err(AcceptError::User {
                     source: "todo".into(),
+                    meta: Default::default(),
                 })
             }
         }
@@ -420,7 +419,7 @@ pub mod coordinator {
     /// Run the Coordinator.
     /// The only stop condition is currently either an error or Ctrl+C.
     pub async fn run(endpoint: iroh::Endpoint) -> anyhow::Result<()> {
-        let node_id = endpoint.node_id();
+        let node_id = endpoint.id();
         let bind_info = endpoint.bound_sockets();
         info!("node_id: {node_id}; listening on {bind_info:?}");
 
@@ -600,7 +599,7 @@ pub mod admin {
 #[cfg(test)]
 mod tests {
     use crate::protocols::echo::EchoSendArgs;
-    use std::{str::FromStr, time::Duration};
+    use std::time::Duration;
 
     use crate::{
         admin::cli::{AdminArgs, AdminCmd},
@@ -610,7 +609,7 @@ mod tests {
     use super::*;
 
     use anyhow::Context;
-    use iroh::{NodeId, RelayMode, SecretKey};
+    use iroh::{RelayMode, SecretKey};
     use jsonpath_rust::JsonPath;
     use tracing_test::traced_test;
 
@@ -652,8 +651,7 @@ mod tests {
 
             let y_coordinate =
                 util::parse_openssh_ed25519_public(openssh_pubkey.as_bytes()).unwrap();
-            let nodeid = NodeId::from_str(pubkey).unwrap();
-            assert_eq!(nodeid, y_coordinate);
+            assert_eq!(*pubkey, y_coordinate.to_string());
         }
     }
 
@@ -679,7 +677,8 @@ mod tests {
         // left: RelayMap { nodes: {RelayUrl("https://127.0.0.1:46009/"): RelayNode { url: RelayUrl("https://127.0.0.1:46009/"), quic: Some(RelayQuicConfig { port: 7842 }) }} }
         // right: RelayMap { nodes: {RelayUrl("https://127.0.0.1:46009/"): RelayNode { url: RelayUrl("https://127.0.0.1:46009/"), quic: None }} }
         // note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
-        let relay_map: iroh::RelayMap = iroh::RelayNode {
+        // let relay_map: iroh::RelayMap = relay_url.into();
+        let relay_map: iroh::RelayMap = iroh::RelayConfig {
             url: relay_url,
             quic: None,
         }
