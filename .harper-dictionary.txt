@@ -7,6 +7,7 @@ Ctrl
 FIXME
 Fediversity
 MiB
+NAT'ed
 NATS
 NGI
 NLnet
@@ -18,6 +19,7 @@ OS
 S3
 SFTP
 Snix
+aarch64
 buildbot
 devShell
 direnv

@@ -1,24 +1,8 @@
 # NOTES
 Notes taken for research and development purposes.
 
-## Component Connectivity
-Using [iroh][] as the connectivity framework provides flexibility for any network topology among the component instances.
-At its core it's a P2P framework that provides resilient connectivity between nodes. Its SDK has primitives for building application specific protocols. There's a [collection of existing protocols](https://www.iroh.computer/proto), highlighting the following three that are maintained by the core team:
-
-* [iroh-blobs](https://www.iroh.computer/proto/iroh-blobs): Provides blob and blob sequence transfer support for iroh. It implements a simple request-response protocol based on BLAKE3 verified streaming.
-* [iroh-gossip](https://www.iroh.computer/proto/iroh-gossip): Gossip protocol based on epidemic broadcast trees to disseminate messages among a swarm of peers interested in a topic.
-* [iroh-docs](https://www.iroh.computer/proto/iroh-docs): Builds on the blobs and gossip protocol and features multi-dimensional key-value documents with an efficient synchronization protocol.
-
-### Testing
+## Network Testing
 * tokio native helper to simulate various network conditions: https://crates.io/crates/tokio-netem
-
-## Authentication && Authorization
-
-### ed25519 keys
-Iroh natively uses ed25519 keys to authenticate nodes. This allows reusing existing SSH keys where that's desired.
-
-Reference code:
-*  [iroh-node-util code showing SSH key handling](https://github.com/n0-computer/iroh-node-util/blob/3e9702ad215b9b986c6d45e4762a8fbe241163b0/src/fs.rs#L11)
 
 ## Authorization
 Iroh-docs comes with [a builtin capability model](https://docs.rs/iroh-docs/latest/iroh_docs/sync/enum.Capability.html) with Write and Read operations per Namespace. In scoping the namespaces appropriately, this model is flexible enough for all our use-cases.
