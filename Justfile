@@ -1,12 +1,12 @@
 run-coordinator +args="":
     #!/usr/bin/env bash
-    RUST_LOG=app=trace,lib=trace cargo run -- \
+    RUST_LOG=flt=trace,flt_lib=trace cargo run -- \
         --maybe-secret-key=./fixtures/coordinator.ed25519 coordinator \
         {{args}}
 
 run-admin +args="":
     #!/usr/bin/env bash
-    RUST_LOG=app=trace,lib=trace cargo run -- \
+    RUST_LOG=flt=trace,flt_lib=trace cargo run -- \
         --maybe-secret-key=./fixtures/admin.ed25519 admin \
         {{args}}
 

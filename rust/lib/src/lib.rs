@@ -9,6 +9,7 @@ pub mod util {
     use iroh::{discovery::ConcurrentDiscovery, PublicKey, SecretKey};
     use url::Url;
 
+    // Reference code in iroh-node-util showing SSH key handling: https://github.com/n0-computer/iroh-node-util/blob/3e9702ad215b9b986c6d45e4762a8fbe241163b0/src/fs.rs#L11
     pub fn parse_openssh_ed25519_private(mut r: impl std::io::Read) -> anyhow::Result<SecretKey> {
         let mut raw = Vec::new();
         r.read_to_end(&mut raw)?;
@@ -603,7 +604,7 @@ mod tests {
 
     use crate::{
         admin::cli::{AdminArgs, AdminCmd},
-        util::{get_endpoint, parse_openssh_ed25519_private, Discoveries},
+        util::{get_endpoint, Discoveries},
     };
 
     use super::*;
@@ -646,7 +647,7 @@ mod tests {
             pubkey,
         } in TEST_KEYS
         {
-            let secret = parse_openssh_ed25519_private(openssh_key.as_bytes()).unwrap();
+            let secret = util::parse_openssh_ed25519_private(openssh_key.as_bytes()).unwrap();
             assert_eq!(&secret.public().to_string(), pubkey);
 
             let y_coordinate =
