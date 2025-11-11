@@ -12,6 +12,8 @@ rand = { workspace = true }
 clap = { workspace = true }
 
 iroh = { version = "0.95.0", features = ["discovery-local-network"] }
+irpc = { version = "0.11.0", features = ["derive", "rpc"] }
+irpc-iroh = "0.11.0"
 serde = "1.0.219"
 serde_json = "1.0.143"
 mid = { version = "4.0.0", features = ["serde"] }
@@ -21,13 +23,34 @@ better-commands = "1.0.2"
 jsonpath-rust = "1.0.4"
 ssh-key = { version = "0.6.7", features = ["ed25519", "encryption"] }
 data-encoding = "2.9.0"
-tokio-util = { version = "0.7.16", features = ["io"] }
 blake3 = "1.8.2"
 url = "2.5.7"
-irpc = "0.10.0"
+arc-slice = { version = "0.1.0", features = ["raw-buffer", "serde", "bytes"] }
+
+iroh-relay = { version = "0.95.0", features = [ "server", "test-utils" ], optional = true }
+iroh-dns-server = { version = "0.95.0", optional = true}
+tracing-test = { version = "0.2.5", features = ["no-env-filter"], optional = true}
+test-case = { version = "3.3.1", optional = true }
+criterion = { version = "0.7.0", features = ["async", "stable"], optional = true }
 
 [dev-dependencies]
-tracing-test = { version = "0.2.5", features = ["no-env-filter"] }
-iroh = { version = "0.95.0", features = ["discovery-local-network", "test-utils"] }
-iroh-relay = { version = "0.95.0", features = [ "server", "test-utils" ] }
-iroh-dns-server = "0.95.0"
+flt_lib = { path = ".", features = ["test"]}
+
+[[bench]]
+name = "echo_completes"
+harness = false
+required-features = ["test"]
+
+[features]
+
+default = []
+
+test = [
+    "iroh/test-utils",
+
+    "dep:iroh-dns-server",
+    "dep:iroh-relay",
+    "dep:test-case",
+    "dep:tracing-test",
+    "dep:criterion",
+]

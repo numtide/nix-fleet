@@ -29,5 +29,6 @@ craneLib.devShell {
   # Extra inputs can be added here; cargo and rustc are provided by default.
   packages = [
     pkgs.cargo-machete
+    pkgs.gnuplot
   ];
 }
