@@ -154,5 +154,5 @@ Building NixOS VM integration tests for the PoT that exists at this stage will a
 ---
 
 [iroh]: https://www.iroh.computer/
-[echo_completes test]: /steveej/nix-fleet/blob/3c4e95172392cf247b45f973ea7773ac16dd18d2/rust/lib/src/lib.rs#L660
+[echo_completes test]: /numtide/nix-fleet/blob/5cefac0015d130634714b1ee9d09971f7faa5678/rust/lib/src/lib.rs#L660
 <!--[echo_completes test]: blob/3c4e95172392cf247b45f973ea7773ac16dd18d2/rust/lib/src/lib.rs#661-->
