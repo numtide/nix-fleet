@@ -2,6 +2,7 @@ words = [
     "alpn",
     "cachix",
     "facter",
+    "irpc",
     "lnet",
     "natively",
     "nextest",

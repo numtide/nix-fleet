@@ -4,7 +4,9 @@ CD
 Cachix
 Comin
 Ctrl
+FIXME
 Fediversity
+MiB
 NATS
 NGI
 NLnet

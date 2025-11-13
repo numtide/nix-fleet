@@ -1,0 +1,139 @@
+use std::time::Duration;
+
+use crate::{
+    admin::cli::{AdminArgs, AdminCmd},
+    util::{get_endpoint, Discoveries},
+};
+
+use super::*;
+
+use anyhow::Context;
+use iroh::SecretKey;
+use jsonpath_rust::JsonPath;
+
+struct TestKeyTuple {
+    openssh_key: &'static str,
+    openssh_pubkey: &'static str,
+    pubkey: &'static str,
+}
+
+#[test]
+fn parses_openssh_key() {
+    // List of tuples of (Open SSH private keys, NodeId)
+    const TEST_KEYS: &[TestKeyTuple] = &[
+        TestKeyTuple {
+            openssh_key: include_str!("../../../fixtures/coordinator.ed25519"),
+            openssh_pubkey: include_str!("../../../fixtures/coordinator.ed25519.pub"),
+            pubkey: "ba48d5a18a06a0348511b83ef8e8b900ea653c43086e55613344cdd8192f7f6c",
+        },
+        TestKeyTuple {
+            openssh_key: include_str!("../../../fixtures/agent.ed25519"),
+            openssh_pubkey: include_str!("../../../fixtures/agent.ed25519.pub"),
+            pubkey: "976f02e6c46cd53189128d7b72ec1a2eeff05012130debefc7a5dab8d0744139",
+        },
+        TestKeyTuple {
+            openssh_key: include_str!("../../../fixtures/admin.ed25519"),
+            openssh_pubkey: include_str!("../../../fixtures/admin.ed25519.pub"),
+            pubkey: "7be5463aab9b1f0446ab70dbc883e0fd2b2da0a6a2a81dc3061e5c25ce4c4e94",
+        },
+    ];
+
+    for TestKeyTuple {
+        openssh_key,
+        openssh_pubkey,
+        pubkey,
+    } in TEST_KEYS
+    {
+        let secret = util::parse_openssh_ed25519_private(openssh_key.as_bytes()).unwrap();
+        assert_eq!(&secret.public().to_string(), pubkey);
+
+        let y_coordinate = util::parse_openssh_ed25519_public(openssh_pubkey.as_bytes()).unwrap();
+        assert_eq!(*pubkey, y_coordinate.to_string());
+    }
+}
+
+#[tokio::test]
+async fn facts_can_be_gathered() {
+    let facts = facts::Facts::try_from_environment().await.unwrap();
+
+    if cfg!(target_os = "linux") {
+        assert_eq!(facts.os, platforms::OS::Linux);
+        let facter = facts.maybe_facter.unwrap();
+
+        let js = serde_json::from_str::<serde_json::Value>(&facter)
+            .context(format!("parsing {facter}"))
+            .unwrap();
+
+        let maybe_kernel = js.query("$.kernel").unwrap().first().unwrap().as_str();
+        assert_eq!(maybe_kernel, Some("Linux"), "{facter}");
+    } else if cfg!(target_os = "macos") {
+        assert_eq!(facts.os, platforms::OS::MacOS);
+        let facter = facts.maybe_facter.unwrap();
+
+        let js = serde_json::from_str::<serde_json::Value>(&facter)
+            .context(format!("parsing {facter}"))
+            .unwrap();
+
+        let maybe_kernel = js.query("$.kernel").unwrap().first().unwrap().as_str();
+        assert_eq!(maybe_kernel, Some("Darwin"), "{facter}");
+    } else {
+        tracing::warn!("unsupported target os")
+    }
+}
+
+/// Verify that the agent sends its facts to the coordinator.
+#[ignore = "WIP"]
+#[tokio::test]
+async fn admin_can_list_agents_via_coordinator() {
+    let coordinator_key = SecretKey::generate(&mut rand::rng());
+    let coordinator_pubkey = coordinator_key.public();
+    let admin_key = SecretKey::generate(&mut rand::rng());
+    let _admin_pubkey = admin_key.public();
+    let agent_key = SecretKey::generate(&mut rand::rng());
+    let _agent_pubkey = agent_key.public();
+
+    // Spawn the coordinator
+    let _coordinator_handle = tokio::spawn(coordinator::run(
+        get_endpoint(Some(coordinator_key), None, Discoveries::default())
+            .await
+            .unwrap(),
+    ));
+
+    // Spawn an agent that will talk to the coordinator
+    let _agent_handle = tokio::spawn(agent::run(
+        get_endpoint(Some(agent_key), None, Discoveries::default())
+            .await
+            .unwrap(),
+        // TODO
+        [coordinator_pubkey].into(),
+    ));
+
+    {
+        //
+        // Define all the futures in a scope and then pass them concisely to select.
+        // This circumvents rustfmt not formatting code inside the select! macro.
+        //
+
+        let admin_future = admin::run(
+            get_endpoint(Some(admin_key), None, Discoveries::default())
+                .await
+                .unwrap(),
+            AdminArgs {
+                cmd: AdminCmd::ListAgents {},
+                coordinators: Default::default(),
+            },
+        );
+
+        let timeout_future = tokio::time::sleep(Duration::from_millis(100));
+
+        tokio::select! {
+           _ = admin_future => {
+               // Query coordinator for a list of agents
+               // assert the list contains the expected agent
+
+               todo!("")
+           },
+           _ = timeout_future => { panic!("timeout") },
+        }
+    };
+}
