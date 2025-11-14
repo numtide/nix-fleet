@@ -31,7 +31,9 @@ Outcome: Design of the overall architecture and component internals, issue defin
 At its core Iroh is a P2P framework that provides resilient connectivity between nodes.
 Using iroh as the connectivity framework provides flexibility for any network topology among the component instances.
 
-The [echo_completes test][] uses the custom `Echo` protocol that ensures the sent data is in fact transmitted and echoed correctly.
+The [echo_completes_admin_to_coordinator][] uses the custom `Echo` protocol that ensures the sent data is in fact transmitted and echoed correctly.
+
+This test is quite comprehensive it sets up a Coordinator and Admin to run the Echo in between. More on this follows in subsequent ACs.
 
 ##### Solving AC2: Iroh's native discovery and relay mechanism
 Iroh natively uses asymmetric ed25519 key pairs to address nodes. As a nice to have side-note: this allows reusing existing SSH keys where desired.
@@ -40,13 +42,41 @@ The public key is used as the of a node and is resolved to a network address via
 
 Iroh provides open-source reference implementations for discovery and relay servers. These can be integrated in-process with any component – the Coordinator is the best fit for the requirements – or run in dedicated process.
 
-The [echo_completes test][] is used to exercise an in-process relay and discovery stack.
+The [echo_completes_admin_to_coordinator][] exercises an in-process relay and discovery stack between a Coordinator and an Admin. The test relies on the discoverability of the Coordinator's PublicKey, as the `AdminArgs` use the `node_id` to address the other side with no further network information.
 
-##### Solving AC3: Using Iroh's SDK primitives
+##### Solving AC3: Evaluating Iroh's SDK primitives and `irpc`
 
-The [echo_completes test][] exercises Iroh's custom protocol routing facilities for a simple `Echo` protocol.
+I'm going to evaluate the low-level native Iroh SDK and `irpc` to send custom data between the Admins, Coordinator, and Agents.
 
-#### Solving AC4: WIP
+
+There is also [irpc][]: a higher level SDK add-on which provides an abstraction for building RPC APIs with Iroh.
+
+##### Native Iroh SDK
+The implementation of an `Echo` protocol was a mild surprise in the amount of low-level code it requires. Specifically for dealing with boundaries of data across the stream, i.e. message framing, that Iroh does not provide natively.
+
+Besides that, the SDK is equipped for custom protocols and their routing with the help of [Application-Layer Protocol Negotiation (ALPN)][alpn] are plenty sufficient.
+
+The [echo_completes_admin_to_coordinator][] instruments [a custom `Echo` protocol][impl Echo] that's built with the native SDK with bi-directional streaming.
+
+##### [irpc][]
+`irpc` comes with a convention of structuring a framed message protocol on top of Iroh.
+
+I wrote [a two variant EchoRpc protocol implemented with `irpc`](https://github.com/numtide/nix-fleet/blob/5cefac0015d130634714b1ee9d09971f7faa5678/rust/lib/src/protocols/echo.rs#L82) and the result ended up with a subjectively clearer structure than the implementation with the lower level SDK.
+
+To understand the overhead I wrote [a majorly unoptimized benchmark](https://github.com/numtide/nix-fleet/blob/5cefac0015d130634714b1ee9d09971f7faa5678/rust/lib/benches/echo_completes.rs#L10).
+Unoptimized refers to the initialization costs not being properly factored out before the benchmarks iteration loop.
+The result is an approximate 20% overhead in the overall benchmark performance for the `irpc` implementation.
+
+At the current phase I'm concluding this to be acceptable and will opt for `irpc` to benefit from the higher-level building blocks. I'm optimistic that sufficient optimization is possible *if* the protocol transfer speeds turn out to be a bottleneck.
+
+##### Solving AC4: WIP
+Here I assume that the Coordinator can be a long-running process and with persistence.
+
+`irpc` does not provide caching and the remote endpoint needs to be online for a successful message transmission.
+Retries would need to be manually implemented between Admins and the Coordinator, as well as in between the Coordinator and the Agents.
+This is in-line with the central role of the Coordinator in this phase.
+
+So the goal here is to identify the highest level SDK and libraries for eventual i.e. asynchronous message delivery.
 
 There's a [collection of existing protocols](https://www.iroh.computer/proto) which can be built atop of.
 
@@ -55,9 +85,9 @@ Here I'm highlighting the following three that are maintained by the core team a
 * [iroh-gossip](https://www.iroh.computer/proto/iroh-gossip): Gossip protocol based on epidemic broadcast trees to disseminate messages among a swarm of nodes interested in a topic.
 * [iroh-docs](https://www.iroh.computer/proto/iroh-docs): Composes iroh-blobs and iroh-gossip to enable multi-dimensional key-value documents with an eventual consistency synchronization protocol. It supports in-memory and persistent storage for documents.
 
-Then there is [irpc](https://github.com/n0-computer/irpc) which is a library that provides an abstraction for building RPC APIs with Iroh.
+##### Evaluating [iroh-docs]
+Given its eventual consistency properties, iroh-docs provides runtime-caching for retries out-of-the box.
 
-- WIP: evaluate irpc by refactoring the `Echo` protocol with it
 - TODO: evaluate single-writer iroh-docs documents for low-complexity message distribution.
 
 #### Solving AC5: TODO
@@ -154,5 +184,7 @@ Building NixOS VM integration tests for the PoT that exists at this stage will a
 ---
 
 [iroh]: https://www.iroh.computer/
-[echo_completes test]: /numtide/nix-fleet/blob/5cefac0015d130634714b1ee9d09971f7faa5678/rust/lib/src/lib.rs#L660
-<!--[echo_completes test]: blob/3c4e95172392cf247b45f973ea7773ac16dd18d2/rust/lib/src/lib.rs#661-->
+[impl Echo]: https://github.com/numtide/nix-fleet/blob/5cefac0015d130634714b1ee9d09971f7faa5678/rust/lib/src/protocols/echo.rs#L16
+[echo_completes_admin_to_coordinator]: https://github.com/numtide/nix-fleet/blob/5cefac0015d130634714b1ee9d09971f7faa5678/rust/lib/src/protocols/echo.rs#L572
+[irpc]: https://github.com/n0-computer/irpc
+[alpn]: https://en.wikipedia.org/wiki/Application-Layer_Protocol_Negotiation
