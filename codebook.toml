@@ -1,9 +1,11 @@
 words = [
     "alpn",
+    "buildbot",
     "cachix",
     "facter",
     "irpc",
     "lnet",
+    "nat'ed",
     "natively",
     "nextest",
     "nixos",
