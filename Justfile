@@ -10,6 +10,9 @@ run-admin +args="":
         --maybe-secret-key=./fixtures/admin.ed25519 admin \
         {{args}}
 
-run-admin-echo +args="-n100":
-    just run-admin echo ba48d5a18a06a0348511b83ef8e8b900ea653c43086e55613344cdd8192f7f6c \
+run-admin-echo-hash +args="-n100":
+    just run-admin echo-hash ba48d5a18a06a0348511b83ef8e8b900ea653c43086e55613344cdd8192f7f6c \
         {{args}}
+
+bench:
+    cargo bench --features test

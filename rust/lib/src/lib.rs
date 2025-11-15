@@ -195,7 +195,7 @@ pub mod coordinator {
     use tracing::info;
 
     use crate::protocols::{
-        echo::{Echo, EchoRpcApi},
+        echo_hash::{native::EchoHashNative, rpc::EchoHashRpcApi},
         enrollment::Enrollment,
         node_admin::NodeAdmin,
     };
@@ -207,12 +207,13 @@ pub mod coordinator {
         let bind_info = endpoint.bound_sockets();
         info!("node_id: {node_id}; listening on {bind_info:?}");
 
-        let router = Router::builder(endpoint)
-            .accept(Echo::ALPN, Echo)
-            .accept(EchoRpcApi::ALPN, EchoRpcApi::spawn().expose()?)
+        let router_builder = Router::builder(endpoint.clone())
+            .accept(EchoHashNative::ALPN, EchoHashNative)
+            .accept(EchoHashRpcApi::ALPN, EchoHashRpcApi::spawn().expose()?)
             .accept(NodeAdmin::ALPN, NodeAdmin)
-            .accept(Enrollment::ALPN, Enrollment)
-            .spawn();
+            .accept(Enrollment::ALPN, Enrollment);
+
+        let router = router_builder.spawn();
 
         tokio::signal::ctrl_c().await?;
         router.shutdown().await?;
@@ -224,14 +225,14 @@ pub mod coordinator {
 pub mod agent {
     use iroh::{protocol::Router, PublicKey};
 
-    use crate::protocols::{echo::Echo, node_admin::NodeAdmin};
+    use crate::protocols::{echo_hash::native::EchoHashNative, node_admin::NodeAdmin};
 
     pub async fn run(
         endpoint: iroh::Endpoint,
         _coordinators: Box<[PublicKey]>,
     ) -> anyhow::Result<()> {
         let router = Router::builder(endpoint)
-            .accept(Echo::ALPN, Echo)
+            .accept(EchoHashNative::ALPN, EchoHashNative)
             .accept(NodeAdmin::ALPN, NodeAdmin)
             .spawn();
 
@@ -350,9 +351,9 @@ pub mod admin {
         #[derive(Debug, Clone, Subcommand)]
         pub enum AdminCmd {
             /// Send a message to the node with the PublicKey
-            Echo {
+            EchoHash {
                 #[command(flatten)]
-                args: crate::protocols::echo::EchoArgs,
+                args: crate::protocols::echo_hash::EchoHashArgs,
             },
 
             /// Retrieve a list of agents
@@ -364,10 +365,8 @@ pub mod admin {
     /// The only stop condition is currently either an error or Ctrl+C.
     pub async fn run(endpoint: iroh::Endpoint, admin_args: AdminArgs) -> anyhow::Result<()> {
         match admin_args.cmd {
-            cli::AdminCmd::Echo { args } => {
-                let echo = crate::protocols::echo::Echo;
-
-                echo.send(endpoint, args).await?;
+            cli::AdminCmd::EchoHash { args } => {
+                crate::protocols::echo_hash::send(endpoint, args).await?;
             }
             cli::AdminCmd::ListAgents { .. } => {
                 todo!("")
