@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use flt_lib::protocols::echo::{tests::EchoCompletesFnContext, SendMode};
+use flt_lib::protocols::echo_hash::{tests::EchoCompletesFnContext, SendMode};
 
 fn echo_completes_bench_config() -> Criterion {
     Criterion::default()
@@ -8,7 +8,7 @@ fn echo_completes_bench_config() -> Criterion {
 }
 
 fn echo_completes_bench(c: &mut Criterion) {
-    let modes = vec![SendMode::Stream, SendMode::Rpc, SendMode::RpcStream];
+    let modes = vec![SendMode::Native, SendMode::Rpc, SendMode::RpcStream];
     for mode in modes {
         c.bench_function(&format!("echo_completes_{:?}", mode), |b| {
             let rt = tokio::runtime::Builder::new_current_thread()
@@ -25,7 +25,7 @@ fn echo_completes_bench(c: &mut Criterion) {
                         .run(
                             mode.clone(),
                             2,
-                            flt_lib::protocols::echo::EchoRpcApi::MAX_CHUNK_SIZE + 1,
+                            flt_lib::protocols::echo_hash::rpc::EchoHashRpcApi::MAX_CHUNK_SIZE + 1,
                             10.0,
                         )
                         .await,

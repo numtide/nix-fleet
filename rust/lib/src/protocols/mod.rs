@@ -1,6 +1,6 @@
 //! Protocol logic used on top of iroh
 
-pub mod echo;
+pub mod echo_hash;
 
 pub mod enrollment {
     use iroh::protocol::{AcceptError, ProtocolHandler};
