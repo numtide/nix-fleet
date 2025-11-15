@@ -125,6 +125,7 @@ pub mod util {
         let endpoint = builder.bind().await?;
 
         if let Some(relay_mode) = relay_mode {
+            tracing::debug!("waiting for network to be online..");
             tokio::time::timeout(tokio::time::Duration::from_millis(500), endpoint.online())
                 .await
                 .context(format!("waiting for home relay: {relay_mode:?}"))?;
@@ -192,10 +193,11 @@ pub mod protocols;
 /// It's expected to run on machines with high uptime, bandwidth, and reliability; aka servers.
 pub mod coordinator {
     use iroh::protocol::Router;
+    use iroh_docs::engine::ProtectCallbackHandler;
     use tracing::info;
 
     use crate::protocols::{
-        echo_hash::{native::EchoHashNative, rpc::EchoHashRpcApi},
+        echo_hash::{docs::EchoHashDocsApi, native::EchoHashNative, rpc::EchoHashRpcApi},
         enrollment::Enrollment,
         node_admin::NodeAdmin,
     };
@@ -212,6 +214,30 @@ pub mod coordinator {
             .accept(EchoHashRpcApi::ALPN, EchoHashRpcApi::spawn().expose()?)
             .accept(NodeAdmin::ALPN, NodeAdmin)
             .accept(Enrollment::ALPN, Enrollment);
+
+        // Enable iroh-docs and its dependencies
+        let (protect_callback_handler, protect_callback) = ProtectCallbackHandler::new();
+        let blob_store =
+            iroh_blobs::store::mem::MemStore::new_with_opts(iroh_blobs::store::mem::Options {
+                gc_config: Some(iroh_blobs::store::GcConfig {
+                    interval: std::time::Duration::from_millis(100),
+                    add_protected: Some(protect_callback),
+                }),
+            });
+        let blobs = iroh_blobs::BlobsProtocol::new(&blob_store, None);
+        let gossip = iroh_gossip::Gossip::builder().spawn(endpoint.clone());
+        let docs = iroh_docs::protocol::Docs::memory()
+            .protect_handler(protect_callback_handler)
+            .spawn(endpoint.clone(), (*blob_store).clone(), gossip.clone())
+            .await?;
+        let router_builder = router_builder
+            .accept(iroh_blobs::ALPN, blobs.clone())
+            .accept(iroh_gossip::ALPN, gossip)
+            .accept(iroh_docs::ALPN, docs.clone())
+            .accept(
+                EchoHashDocsApi::ALPN,
+                EchoHashDocsApi::spawn(endpoint, blobs, docs).expose()?,
+            );
 
         let router = router_builder.spawn();
 
