@@ -8,16 +8,22 @@ fn echo_completes_bench_config() -> Criterion {
 }
 
 fn echo_completes_bench(c: &mut Criterion) {
-    let modes = vec![SendMode::Native, SendMode::Rpc, SendMode::RpcStream];
+    let modes = vec![
+        SendMode::Native,
+        SendMode::Rpc,
+        SendMode::RpcStream,
+        SendMode::Docs,
+    ];
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let context = rt.block_on(EchoCompletesFnContext::new());
+
     for mode in modes {
         c.bench_function(&format!("echo_completes_{:?}", mode), |b| {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-
-            let context = rt.block_on(EchoCompletesFnContext::new());
-
             b.to_async(&rt).iter(|| async {
                 #[allow(clippy::unit_arg)]
                 std::hint::black_box(

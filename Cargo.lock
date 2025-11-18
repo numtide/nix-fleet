@@ -180,17 +180,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "arc-slice"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f55bfcb612be7dde478052f4067f400502245aaa2675acaa263d2496b5a1541"
-dependencies = [
- "bytes",
- "cfg-if",
- "serde",
-]
-
-[[package]]
 name = "arc-swap"
 version = "1.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1700,6 +1689,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a3076410a55c90011c298b04d0cfa770b00fa04e1e3c97d3f6c9de105a03844"
 
 [[package]]
+name = "fixedbitset"
+version = "0.5.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
+
+[[package]]
 name = "flt"
 version = "0.1.0"
 dependencies = [
@@ -1716,16 +1711,19 @@ name = "flt_lib"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "arc-slice",
  "better-commands",
  "blake3",
+ "bytes",
  "clap",
  "criterion",
  "data-encoding",
  "flt_lib",
+ "futures-util",
  "iroh",
  "iroh-blobs",
  "iroh-dns-server",
+ "iroh-docs",
+ "iroh-gossip",
  "iroh-relay",
  "irpc",
  "irpc-iroh",
@@ -1832,6 +1830,21 @@ checksum = "2dff15bf788c671c1934e366d07e30c1814a8ef514e1af724a602e8a2fbe1b10"
 dependencies = [
  "futures-core",
  "futures-sink",
+]
+
+[[package]]
+name = "futures-concurrency"
+version = "7.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0eb68017df91f2e477ed4bea586c59eaecaa47ed885a770d0444e21e62572cd2"
+dependencies = [
+ "fixedbitset",
+ "futures-buffered",
+ "futures-core",
+ "futures-lite",
+ "pin-project",
+ "slab",
+ "smallvec",
 ]
 
 [[package]]
@@ -2656,7 +2669,7 @@ dependencies = [
  "rustls-webpki",
  "serde",
  "smallvec",
- "strum",
+ "strum 0.27.2",
  "swarm-discovery",
  "time",
  "tokio",
@@ -2760,7 +2773,7 @@ dependencies = [
  "rustls-pemfile",
  "serde",
  "struct_iterable",
- "strum",
+ "strum 0.27.2",
  "tokio",
  "tokio-rustls",
  "tokio-rustls-acme",
@@ -2774,6 +2787,78 @@ dependencies = [
  "ttl_cache",
  "url",
  "z32",
+]
+
+[[package]]
+name = "iroh-docs"
+version = "0.95.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9fe6dc5524c65b401ebb5de204af8921c8cb329316eb972538622d708b4636c"
+dependencies = [
+ "anyhow",
+ "async-channel 2.5.0",
+ "blake3",
+ "bytes",
+ "derive_more 2.0.1",
+ "ed25519-dalek 3.0.0-pre.1",
+ "futures-buffered",
+ "futures-lite",
+ "futures-util",
+ "hex",
+ "iroh",
+ "iroh-blobs",
+ "iroh-gossip",
+ "iroh-metrics",
+ "iroh-quinn",
+ "iroh-tickets",
+ "irpc",
+ "n0-error",
+ "n0-future",
+ "num_enum",
+ "postcard",
+ "rand 0.9.2",
+ "redb 2.6.3",
+ "self_cell",
+ "serde",
+ "serde-error",
+ "strum 0.26.3",
+ "tempfile",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "iroh-gossip"
+version = "0.95.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "026dd31b487ec5e80ac0240f4eb70cd6c0a2800f6ef44beca5329443c194bb22"
+dependencies = [
+ "blake3",
+ "bytes",
+ "data-encoding",
+ "derive_more 2.0.1",
+ "ed25519-dalek 3.0.0-pre.1",
+ "futures-concurrency",
+ "futures-lite",
+ "futures-util",
+ "hex",
+ "indexmap",
+ "iroh",
+ "iroh-base",
+ "iroh-metrics",
+ "iroh-quinn",
+ "irpc",
+ "n0-error",
+ "n0-future",
+ "postcard",
+ "rand 0.9.2",
+ "serde",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]
@@ -2920,7 +3005,7 @@ dependencies = [
  "serde_bytes",
  "sha1",
  "simdutf8",
- "strum",
+ "strum 0.27.2",
  "time",
  "tokio",
  "tokio-rustls",
@@ -3293,6 +3378,7 @@ version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c7d5969a2f40e9d9ed121a789c415f4114ac2b28e5731c080bdefee217d3b3fb"
 dependencies = [
+ "anyhow",
  "n0-error-macros",
  "spez",
 ]
@@ -5044,6 +5130,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde-error"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "342110fb7a5d801060c885da03bf91bfa7c7ca936deafcc64bb6706375605d47"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "serde_bencode"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5460,11 +5555,33 @@ checksum = "e9426b2a0c03e6cc2ea8dbc0168dbbf943f88755e409fb91bcb8f6a268305f4a"
 
 [[package]]
 name = "strum"
+version = "0.26.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8fec0f0aef304996cf250b31b5a10dee7980c85da9d759361292b8bca5a18f06"
+dependencies = [
+ "strum_macros 0.26.4",
+]
+
+[[package]]
+name = "strum"
 version = "0.27.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "af23d6f6c1a224baef9d3f61e287d2761385a5b88fdab4eb4c6f11aeb54c4bcf"
 dependencies = [
- "strum_macros",
+ "strum_macros 0.27.2",
+]
+
+[[package]]
+name = "strum_macros"
+version = "0.26.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4c6bee85a5a24955dc440386795aa378cd9cf82acd5f764469152d2270e581be"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "rustversion",
+ "syn 2.0.110",
 ]
 
 [[package]]
@@ -5579,6 +5696,19 @@ name = "tagptr"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
+
+[[package]]
+name = "tempfile"
+version = "3.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d31c77bdf42a745371d260a26ca7163f1e0924b64afa0b688e61b5a9fa02f16"
+dependencies = [
+ "fastrand",
+ "getrandom 0.3.4",
+ "once_cell",
+ "rustix",
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "termcolor"
