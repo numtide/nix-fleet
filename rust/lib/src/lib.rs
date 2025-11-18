@@ -133,58 +133,6 @@ pub mod util {
 
         Ok(endpoint)
     }
-
-    /// Spawn a server suitable for testing, while optionally enabling mainline with custom
-    /// bootstrap addresses.
-    #[cfg(any(test, feature = "test"))]
-    pub async fn iroh_dns_spawn_for_tests_with_options() -> anyhow::Result<(
-        iroh_dns_server::http::HttpServer,
-        url::Url,
-        iroh_dns_server::dns::DnsServer,
-        std::net::SocketAddr,
-    )> {
-        use std::net::{IpAddr, Ipv4Addr};
-
-        let mut config = iroh_dns_server::config::Config::default();
-        config.dns.port = 0;
-        config.dns.bind_addr = Some(IpAddr::V4(Ipv4Addr::LOCALHOST));
-        config.http.as_mut().unwrap().port = 0;
-        config.http.as_mut().unwrap().bind_addr = Some(IpAddr::V4(Ipv4Addr::LOCALHOST));
-        config.https = None;
-        config.metrics = Some(iroh_dns_server::config::MetricsConfig::disabled());
-
-        let store = iroh_dns_server::ZoneStore::in_memory(Default::default(), Default::default())
-            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-
-        let dns_handler =
-            iroh_dns_server::dns::DnsHandler::new(store.clone(), &config.dns, Default::default())
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-
-        let state = iroh_dns_server::state::AppState {
-            store,
-            dns_handler,
-            metrics: Default::default(),
-        };
-
-        let http_server = iroh_dns_server::http::HttpServer::spawn(
-            config.http,
-            config.https,
-            config.pkarr_put_rate_limit,
-            state.clone(),
-        )
-        .await
-        .unwrap();
-
-        let dns_server =
-            iroh_dns_server::dns::DnsServer::spawn(config.dns, state.dns_handler.clone())
-                .await
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-
-        let dns_addr = dns_server.local_addr();
-        let http_addr = http_server.http_addr().expect("http is set");
-        let http_url = format!("http://{http_addr}").parse::<url::Url>()?;
-        Ok((http_server, http_url, dns_server, dns_addr))
-    }
 }
 
 pub mod protocols;
@@ -405,3 +353,6 @@ pub mod admin {
 
 #[cfg(test)]
 pub mod tests;
+
+#[cfg(feature = "test")]
+pub mod test_utils;
