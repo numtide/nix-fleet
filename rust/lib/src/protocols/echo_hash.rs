@@ -884,9 +884,7 @@ pub mod docs {
 
 #[cfg(any(test, feature = "test"))]
 pub mod tests {
-    use iroh::RelayMode;
     use test_case::test_case;
-    use tokio::task::JoinHandle;
     use tracing_test::traced_test;
 
     use crate::{
@@ -894,117 +892,55 @@ pub mod tests {
             self,
             cli::{AdminArgs, AdminCmd},
         },
-        coordinator,
         protocols::echo_hash::{EchoHashArgs, SendMode},
+        test_utils::RelayedTestContext,
         util::{self, get_endpoint},
     };
 
-    pub struct EchoCompletesFnContext {
-        #[allow(unused)]
-        relay_server: iroh_relay::server::Server,
-        #[allow(unused)]
-        iroh_dns_http_server: iroh_dns_server::http::HttpServer,
-        #[allow(unused)]
-        coordinator_handle: JoinHandle<Result<(), anyhow::Error>>,
+    pub async fn run_echo_hash_with_context(
+        ctx: &RelayedTestContext,
+        mode: SendMode,
+        number: usize,
+        size: usize,
+        timeout: f64,
+    ) {
+        let RelayedTestContext {
+            coordinator_pubkey,
+            relay_mode,
+            iroh_dns_http_url,
+            admin_key,
+            ..
+        } = ctx;
 
-        coordinator_pubkey: iroh::PublicKey,
-        relay_mode: Option<RelayMode>,
-        iroh_dns_http_url: url::Url,
-        admin_key: iroh::SecretKey,
-    }
+        let admin_endpoint = get_endpoint(
+            Some(admin_key.clone()),
+            relay_mode.clone(),
+            util::Discoveries::Custom {
+                secret_key: admin_key.clone().into(),
+                url: iroh_dns_http_url.clone().into(),
+            },
+        )
+        .await
+        .unwrap();
 
-    impl EchoCompletesFnContext {
-        pub async fn new() -> EchoCompletesFnContext {
-            // run a local relay server
-            let relay_server =
-                iroh_relay::server::Server::spawn(iroh_relay::server::testing::server_config())
-                    .await
-                    .unwrap();
-            let relay_mode = Some({
-                // TODO: switch to http and remove the insecure TLS verification workaround
-                let relay_url = relay_server.https_url().unwrap();
-
-                let relay_map: iroh::RelayMap = iroh::RelayConfig {
-                    url: relay_url,
-                    quic: None,
-                }
-                .into();
-
-                RelayMode::Custom(relay_map.clone())
-            });
-
-            let (iroh_dns_http_server, iroh_dns_http_url, _iroh_dns_server, iroh_dns_url) =
-                util::iroh_dns_spawn_for_tests_with_options().await.unwrap();
-
-            tracing::info!("test servers running:\nrelay: {relay_mode:?}\niroh_dns_http: {iroh_dns_http_url}\niroh_dns: {iroh_dns_url}");
-
-            // coordinator
-            let coordinator_key = iroh::SecretKey::generate(&mut rand::rng());
-            let coordinator_pubkey = coordinator_key.public();
-            let coordinator_endpoint = get_endpoint(
-                Some(coordinator_key.clone()),
-                relay_mode.clone(),
-                util::Discoveries::Custom {
-                    secret_key: Box::new(coordinator_key),
-                    url: iroh_dns_http_url.clone().into(),
-                },
-            )
-            .await
-            .unwrap();
-            let coordinator_handle = tokio::spawn(coordinator::run(coordinator_endpoint));
-
-            let admin_key = iroh::SecretKey::generate(&mut rand::rng());
-
-            EchoCompletesFnContext {
-                relay_server,
-                iroh_dns_http_server,
-                coordinator_pubkey,
-                coordinator_handle,
-                relay_mode,
-                iroh_dns_http_url,
-                admin_key,
-            }
-        }
-
-        pub async fn run(&self, mode: SendMode, number: usize, size: usize, timeout: f64) {
-            let EchoCompletesFnContext {
-                coordinator_pubkey,
-                relay_mode,
-                iroh_dns_http_url,
-                admin_key,
-                ..
-            } = self;
-
-            let admin_endpoint = get_endpoint(
-                Some(admin_key.clone()),
-                relay_mode.clone(),
-                util::Discoveries::Custom {
-                    secret_key: admin_key.clone().into(),
-                    url: iroh_dns_http_url.clone().into(),
-                },
-            )
-            .await
-            .unwrap();
-
-            admin::run(
-                admin_endpoint,
-                AdminArgs {
-                    cmd: AdminCmd::EchoHash {
-                        args: EchoHashArgs {
-                            number,
-                            node_id: *coordinator_pubkey,
-                            msg: "hello".to_string(),
-                            size,
-                            timeout,
-                            mode,
-                        },
+        admin::run(
+            admin_endpoint,
+            AdminArgs {
+                cmd: AdminCmd::EchoHash {
+                    args: EchoHashArgs {
+                        number,
+                        node_id: *coordinator_pubkey,
+                        msg: "hello".to_string(),
+                        size,
+                        timeout,
+                        mode,
                     },
-                    coordinators: vec![],
                 },
-            )
-            .await
-            .unwrap();
-        }
+                coordinators: vec![],
+            },
+        )
+        .await
+        .unwrap();
     }
 
     #[traced_test]
@@ -1019,8 +955,8 @@ pub mod tests {
         size: usize,
         timeout: f64,
     ) {
-        let context = EchoCompletesFnContext::new().await;
+        let ctx = RelayedTestContext::new().await;
 
-        context.run(mode, number, size, timeout).await
+        run_echo_hash_with_context(&ctx, mode, number, size, timeout).await
     }
 }
