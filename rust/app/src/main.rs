@@ -45,13 +45,23 @@ async fn main() -> anyhow::Result<()> {
         ),
     };
 
-    let endpoint = get_endpoint(maybe_secret_key, None, Default::default()).await?;
+    let (secret_key, endpoint) = get_endpoint(
+        maybe_secret_key,
+        // TODO: make this configurable
+        None,
+        flt_lib::util::Discoveries::default(),
+    )
+    .await?;
 
-    match args.applet {
-        Applet::Coordinator => flt_lib::coordinator::run(endpoint).await,
+    let result = match args.applet {
+        Applet::Coordinator => flt_lib::coordinator::run(secret_key, endpoint.clone()).await,
         Applet::Agent(agent_args) => {
-            flt_lib::agent::run(endpoint, agent_args.coordinators.into_boxed_slice()).await
+            flt_lib::agent::run(secret_key, endpoint.clone(), agent_args).await
         }
-        Applet::Admin(admin_args) => flt_lib::admin::run(endpoint, admin_args).await,
-    }
+        Applet::Admin(admin_args) => flt_lib::admin::run(endpoint.clone(), admin_args).await,
+    };
+
+    endpoint.close().await;
+
+    result.map(|_| ())
 }

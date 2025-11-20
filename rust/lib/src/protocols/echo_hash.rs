@@ -52,7 +52,7 @@ pub async fn send(
                 trace!("[{i}] writing ({:e} bytes) to stream", msg.len());
 
                 tokio::time::timeout(std::time::Duration::from_secs_f64(timeout), async {
-                    api_client.send_irpc(msg.clone(), mode.clone()).await
+                    api_client.send_irpc(msg.clone(), mode).await
                 })
                 .await??;
 
@@ -379,7 +379,7 @@ pub mod rpc {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum SendMode {
     Native,
     Rpc,
@@ -893,8 +893,7 @@ pub mod tests {
             cli::{AdminArgs, AdminCmd},
         },
         protocols::echo_hash::{EchoHashArgs, SendMode},
-        test_utils::RelayedTestContext,
-        util::{self, get_endpoint},
+        test_utils::{ComponentAssets, RelayedTestContext},
     };
 
     pub async fn run_echo_hash_with_context(
@@ -904,40 +903,44 @@ pub mod tests {
         size: usize,
         timeout: f64,
     ) {
-        let RelayedTestContext {
-            coordinator_pubkey,
-            relay_mode,
-            iroh_dns_http_url,
-            admin_key,
-            ..
-        } = ctx;
+        let coordinator_assets = ctx
+            .spawn_component(
+                |ComponentAssets { key, endpoint, .. }| {
+                    Box::pin(async {
+                        crate::coordinator::run(key, endpoint).await?;
 
-        let admin_endpoint = get_endpoint(
-            Some(admin_key.clone()),
-            relay_mode.clone(),
-            util::Discoveries::Custom {
-                secret_key: admin_key.clone().into(),
-                url: iroh_dns_http_url.clone().into(),
-            },
-        )
-        .await
-        .unwrap();
-
-        admin::run(
-            admin_endpoint,
-            AdminArgs {
-                cmd: AdminCmd::EchoHash {
-                    args: EchoHashArgs {
-                        number,
-                        node_id: *coordinator_pubkey,
-                        msg: "hello".to_string(),
-                        size,
-                        timeout,
-                        mode,
-                    },
+                        Ok(())
+                    })
                 },
-                coordinators: vec![],
+                None,
+            )
+            .await
+            .unwrap();
+
+        ctx.spawn_component(
+            move |ComponentAssets { endpoint, .. }| {
+                Box::pin(async move {
+                    admin::run(
+                        endpoint,
+                        AdminArgs {
+                            cmd: AdminCmd::EchoHash {
+                                args: EchoHashArgs {
+                                    number,
+                                    node_id: coordinator_assets.pubkey,
+                                    msg: "hello".to_string(),
+                                    size,
+                                    timeout,
+                                    mode,
+                                },
+                            },
+                            coordinators: vec![],
+                            timeout,
+                        },
+                    )
+                    .await
+                })
             },
+            None,
         )
         .await
         .unwrap();

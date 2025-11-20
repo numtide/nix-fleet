@@ -24,7 +24,7 @@ Outcome: Design of the overall architecture and component internals, issue defin
 - [x] AC1: The Coordinator can provide a directly addressable network identity and interface so that Admins and Agents can be configured to connect with a specific Coordinator and effectively form a complete network.
 - [x] AC2: Connectivity support for standalone WAN and non-WAN deployments.
 - [x] AC3: Components can pass custom protocol messages over the network.
-- [ ] AC4: There's an extensible mechanism by which an Admin can submit messages to the Coordinator that caches messages to guarantee eventual delivery to Agents who are offline at the time of submission.
+- [ ] AC4: There's an extensible mechanism by which a component can submit messages to the Coordinator that caches messages to guarantee eventual delivery, disregarding online-status of any component at the time of original message creation.
 - [ ] AC5: The message delivery cache persists across component restarts.
 
 ##### Solving AC1: [Iroh][] for node connectivity

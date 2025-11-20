@@ -1,14 +1,6 @@
-use std::time::Duration;
-
-use crate::{
-    admin::cli::{AdminArgs, AdminCmd},
-    util::{get_endpoint, Discoveries},
-};
-
 use super::*;
 
 use anyhow::Context;
-use iroh::SecretKey;
 use jsonpath_rust::JsonPath;
 use tracing_test::traced_test;
 
@@ -91,61 +83,4 @@ async fn facts_can_be_gathered() {
     } else {
         tracing::warn!("unsupported target os")
     }
-}
-
-/// Verify that the agent sends its facts to the coordinator.
-#[ignore = "WIP"]
-#[tokio::test]
-async fn admin_can_list_agents_via_coordinator() {
-    let coordinator_key = SecretKey::generate(&mut rand::rng());
-    let coordinator_pubkey = coordinator_key.public();
-    let admin_key = SecretKey::generate(&mut rand::rng());
-    let _admin_pubkey = admin_key.public();
-    let agent_key = SecretKey::generate(&mut rand::rng());
-    let _agent_pubkey = agent_key.public();
-
-    // Spawn the coordinator
-    let _coordinator_handle = tokio::spawn(coordinator::run(
-        get_endpoint(Some(coordinator_key), None, Discoveries::default())
-            .await
-            .unwrap(),
-    ));
-
-    // Spawn an agent that will talk to the coordinator
-    let _agent_handle = tokio::spawn(agent::run(
-        get_endpoint(Some(agent_key), None, Discoveries::default())
-            .await
-            .unwrap(),
-        // TODO
-        [coordinator_pubkey].into(),
-    ));
-
-    {
-        //
-        // Define all the futures in a scope and then pass them concisely to select.
-        // This circumvents rustfmt not formatting code inside the select! macro.
-        //
-
-        let admin_future = admin::run(
-            get_endpoint(Some(admin_key), None, Discoveries::default())
-                .await
-                .unwrap(),
-            AdminArgs {
-                cmd: AdminCmd::ListAgents {},
-                coordinators: Default::default(),
-            },
-        );
-
-        let timeout_future = tokio::time::sleep(Duration::from_millis(100));
-
-        tokio::select! {
-           _ = admin_future => {
-               // Query coordinator for a list of agents
-               // assert the list contains the expected agent
-
-               todo!("")
-           },
-           _ = timeout_future => { panic!("timeout") },
-        }
-    };
 }

@@ -6,7 +6,7 @@ pub mod util {
 
     use anyhow::Context;
     use iroh::endpoint::Builder;
-    use iroh::{discovery::ConcurrentDiscovery, PublicKey, SecretKey};
+    use iroh::{PublicKey, SecretKey};
     use url::Url;
 
     // Reference code in iroh-node-util showing SSH key handling: https://github.com/n0-computer/iroh-node-util/blob/3e9702ad215b9b986c6d45e4762a8fbe241163b0/src/fs.rs#L11
@@ -63,11 +63,11 @@ pub mod util {
         maybe_secret_key: Option<SecretKey>,
         relay_mode: Option<iroh::RelayMode>,
         discoveries: Discoveries,
-    ) -> anyhow::Result<iroh::Endpoint> {
+    ) -> anyhow::Result<(SecretKey, iroh::Endpoint)> {
         let secret_key = maybe_secret_key.unwrap_or_else(|| SecretKey::generate(&mut rand::rng()));
         let public_key = secret_key.public();
 
-        let mut builder = iroh::Endpoint::builder().secret_key(secret_key);
+        let mut builder = iroh::Endpoint::builder().secret_key(secret_key.clone());
 
         if let Some(relay_mode) = &relay_mode {
             builder = builder.relay_mode(relay_mode.clone());
@@ -102,22 +102,20 @@ pub mod util {
                 );
             }
             Discoveries::Default => {
-                let concurrent = ConcurrentDiscovery::empty();
-
                 match iroh::discovery::mdns::MdnsDiscovery::builder()
                     .advertise(true)
                     .build(public_key)
                 {
                     Ok(mdns_discovery) => {
-                        concurrent.add(mdns_discovery);
+                        builder = builder.discovery(mdns_discovery);
                     }
                     Err(e) => tracing::warn!("error enabling mDNS discovery: {e}"),
                 };
 
-                #[cfg(not(test))]
-                concurrent.add(iroh::discovery::dns::DnsDiscovery::n0_dns().build());
-
-                builder = builder.discovery(concurrent);
+                if cfg!(not(test)) {
+                    builder =
+                        builder.discovery(iroh::discovery::dns::DnsDiscovery::n0_dns().build());
+                }
             }
             Discoveries::None => {}
         };
@@ -131,37 +129,37 @@ pub mod util {
                 .context(format!("waiting for home relay: {relay_mode:?}"))?;
         }
 
-        Ok(endpoint)
+        Ok((secret_key, endpoint))
     }
 }
 
 pub mod protocols;
 
+/// Common types and functions shared between the components.
+pub mod common {}
+
 /// This module implements the Coordinator functionality.
 /// It's expected to run on machines with high uptime, bandwidth, and reliability; aka servers.
 pub mod coordinator {
-    use iroh::protocol::Router;
+    use iroh::{protocol::Router, SecretKey};
     use iroh_docs::engine::ProtectCallbackHandler;
     use tracing::info;
 
     use crate::protocols::{
         echo_hash::{docs::EchoHashDocsApi, native::EchoHashNative, rpc::EchoHashRpcApi},
-        enrollment::Enrollment,
+        enrollment::enrollment_service::{self, EnrollmentServiceApi},
         node_admin::NodeAdmin,
     };
 
     /// Run the Coordinator.
     /// The only stop condition is currently either an error or Ctrl+C.
-    pub async fn run(endpoint: iroh::Endpoint) -> anyhow::Result<()> {
+    pub async fn run(
+        secret_key: SecretKey,
+        endpoint: iroh::Endpoint,
+    ) -> anyhow::Result<serde_json::Value> {
         let node_id = endpoint.id();
         let bind_info = endpoint.bound_sockets();
         info!("node_id: {node_id}; listening on {bind_info:?}");
-
-        let router_builder = Router::builder(endpoint.clone())
-            .accept(EchoHashNative::ALPN, EchoHashNative)
-            .accept(EchoHashRpcApi::ALPN, EchoHashRpcApi::spawn().expose()?)
-            .accept(NodeAdmin::ALPN, NodeAdmin)
-            .accept(Enrollment::ALPN, Enrollment);
 
         // Enable iroh-docs and its dependencies
         let (protect_callback_handler, protect_callback) = ProtectCallbackHandler::new();
@@ -178,13 +176,36 @@ pub mod coordinator {
             .protect_handler(protect_callback_handler)
             .spawn(endpoint.clone(), (*blob_store).clone(), gossip.clone())
             .await?;
+
+        let router_builder = Router::builder(endpoint.clone())
+            .accept(EchoHashNative::ALPN, EchoHashNative)
+            .accept(EchoHashRpcApi::ALPN, EchoHashRpcApi::spawn().expose()?)
+            .accept(NodeAdmin::ALPN, NodeAdmin)
+            .accept(
+                enrollment_service::ALPN,
+                EnrollmentServiceApi::spawn(
+                    secret_key.clone(),
+                    endpoint.clone(),
+                    blobs.clone(),
+                    docs.clone(),
+                )
+                .await?
+                .expose()?,
+            );
+
         let router_builder = router_builder
             .accept(iroh_blobs::ALPN, blobs.clone())
             .accept(iroh_gossip::ALPN, gossip)
             .accept(iroh_docs::ALPN, docs.clone())
             .accept(
                 EchoHashDocsApi::ALPN,
-                EchoHashDocsApi::spawn(endpoint, blobs, docs).expose()?,
+                EchoHashDocsApi::spawn(endpoint.clone(), blobs.clone(), docs.clone()).expose()?,
+            )
+            .accept(
+                enrollment_service::ALPN,
+                EnrollmentServiceApi::spawn(secret_key, endpoint, blobs, docs)
+                    .await?
+                    .expose()?,
             );
 
         let router = router_builder.spawn();
@@ -192,28 +213,62 @@ pub mod coordinator {
         tokio::signal::ctrl_c().await?;
         router.shutdown().await?;
 
-        Ok(())
+        Ok(serde_json::to_value(())?)
     }
 }
 
 pub mod agent {
-    use iroh::{protocol::Router, PublicKey};
+    use iroh::{protocol::Router, PublicKey, SecretKey};
+    use iroh_docs::engine::ProtectCallbackHandler;
+    use linked_hash_set::LinkedHashSet;
+    use tracing::info;
 
-    use crate::protocols::{echo_hash::native::EchoHashNative, node_admin::NodeAdmin};
+    use crate::{admin::cli::AgentArgs, protocols::enrollment::enrollment_agent};
 
     pub async fn run(
+        secret_key: SecretKey,
         endpoint: iroh::Endpoint,
-        _coordinators: Box<[PublicKey]>,
-    ) -> anyhow::Result<()> {
-        let router = Router::builder(endpoint)
-            .accept(EchoHashNative::ALPN, EchoHashNative)
-            .accept(NodeAdmin::ALPN, NodeAdmin)
-            .spawn();
+        agent_args: AgentArgs,
+    ) -> anyhow::Result<serde_json::Value> {
+        let node_id = endpoint.id();
+        let bind_info = endpoint.bound_sockets();
+        info!("node_id: {node_id}; listening on {bind_info:?}");
+
+        // Enable iroh-docs and its dependencies
+        let (protect_callback_handler, protect_callback) = ProtectCallbackHandler::new();
+        let blob_store =
+            iroh_blobs::store::mem::MemStore::new_with_opts(iroh_blobs::store::mem::Options {
+                gc_config: Some(iroh_blobs::store::GcConfig {
+                    interval: std::time::Duration::from_millis(100),
+                    add_protected: Some(protect_callback),
+                }),
+            });
+        let blobs = iroh_blobs::BlobsProtocol::new(&blob_store, None);
+        let gossip = iroh_gossip::Gossip::builder().spawn(endpoint.clone());
+        let docs = iroh_docs::protocol::Docs::memory()
+            .protect_handler(protect_callback_handler)
+            .spawn(endpoint.clone(), (*blob_store).clone(), gossip.clone())
+            .await?;
+
+        let router_builder = Router::builder(endpoint.clone())
+            .accept(iroh_blobs::ALPN, blobs.clone())
+            .accept(iroh_gossip::ALPN, gossip)
+            .accept(iroh_docs::ALPN, docs.clone())
+            .accept(
+                enrollment_agent::ALPN,
+                enrollment_agent::EnrollmentAgentApi::spawn(
+                    secret_key, endpoint, blobs, docs, agent_args,
+                )
+                .await?
+                .expose()?,
+            );
+
+        let router = router_builder.spawn();
 
         tokio::signal::ctrl_c().await?;
         router.shutdown().await?;
 
-        Ok(())
+        Ok(serde_json::to_value(())?)
     }
 }
 
@@ -305,18 +360,30 @@ pub mod facts {
 }
 
 pub mod admin {
-    use crate::admin::cli::AdminArgs;
+    use linked_hash_map::LinkedHashMap;
+
+    use crate::{
+        admin::cli::AdminArgs,
+        protocols::enrollment::enrollment_service::{
+            EnrolledServiceSubscribersT, EnrollmentServiceId,
+        },
+    };
 
     pub mod cli {
         use clap::{Args, Subcommand};
+        use iroh::PublicKey;
 
         /// Definition for the top-level Agent command
-        #[derive(Debug, Clone, Args)]
+        #[derive(Debug, Clone, Args, Default)]
         #[command(version, about)]
         pub struct AgentArgs {
             /// Pass one or multiple NodeIds that are used as coordinators
             #[arg(long)]
             pub coordinators: Vec<iroh::PublicKey>,
+
+            /// Loop interval for the loop that ensures the subscription to the enrollment service remain intact.
+            #[arg(long)]
+            pub maybe_subscribe_loop_interval_seconds: Option<f64>,
         }
 
         /// Definition for the top-level Admin command
@@ -325,7 +392,12 @@ pub mod admin {
         pub struct AdminArgs {
             /// Pass one or multiple NodeIds that are used as coordinators
             #[arg(long)]
-            pub coordinators: Vec<String>,
+            pub coordinators: Vec<PublicKey>,
+
+            /// Timeout duration in seconds for connecting to the remote request, given in floating points.
+            // TODO: create an issue on the irpc repo about connections sometimes taking 5 seconds to initiate
+            #[arg(long, default_value_t = 6.0f64)]
+            pub timeout: f64,
 
             /// The admin command to call.
             #[command(subcommand)]
@@ -341,24 +413,97 @@ pub mod admin {
                 args: crate::protocols::echo_hash::EchoHashArgs,
             },
 
+            Ping {
+                node_id: PublicKey,
+            },
+
+            GetFacts {
+                node_id: PublicKey,
+            },
+
             /// Retrieve a list of agents
-            ListAgents {},
+            ListAgents,
         }
     }
 
     /// Run the Admin command.
     /// The only stop condition is currently either an error or Ctrl+C.
-    pub async fn run(endpoint: iroh::Endpoint, admin_args: AdminArgs) -> anyhow::Result<()> {
-        match admin_args.cmd {
-            cli::AdminCmd::EchoHash { args } => {
-                crate::protocols::echo_hash::send(endpoint, args).await?;
-            }
-            cli::AdminCmd::ListAgents { .. } => {
-                todo!("")
-            }
-        }
+    pub async fn run(
+        endpoint: iroh::Endpoint,
+        admin_args: AdminArgs,
+    ) -> anyhow::Result<serde_json::Value> {
+        let AdminArgs {
+            coordinators,
+            timeout,
+            cmd,
+        } = admin_args;
 
-        Ok(())
+        let timeout = std::time::Duration::from_secs_f64(timeout);
+
+        let json_value = match cmd {
+            cli::AdminCmd::EchoHash { args } => {
+                serde_json::to_value(crate::protocols::echo_hash::send(endpoint, args).await?)?
+            }
+
+            cli::AdminCmd::Ping { node_id } => {
+                let start = tokio::time::Instant::now();
+                let client =
+                    crate::protocols::enrollment::enrollment_agent::EnrollmentAgentClient::connect(
+                        endpoint, node_id,
+                    )
+                    .await?;
+                let time_to_connect = tokio::time::Instant::now() - start;
+
+                let result = client.ping().await?;
+
+                tracing::info!("time to connect: {time_to_connect:?}. ping time {result:#?}");
+
+                serde_json::to_value(())?
+            }
+            cli::AdminCmd::GetFacts { node_id } => {
+                let client =
+                    crate::protocols::enrollment::enrollment_agent::EnrollmentAgentClient::connect(
+                        endpoint, node_id,
+                    )
+                    .await?;
+
+                let result = client.get_facts().await?;
+
+                tracing::info!("{result:#?}");
+
+                serde_json::to_value(result)?
+            }
+            cli::AdminCmd::ListAgents => {
+                let mut enrolled_agents: LinkedHashMap<
+                    EnrollmentServiceId,
+                    EnrolledServiceSubscribersT,
+                > = Default::default();
+                for coordinator in coordinators {
+                    let client = crate::protocols::enrollment::enrollment_service::EnrollmentServiceClient::connect(
+                            endpoint.clone(), coordinator, timeout,
+                        ).await?;
+
+                    let response = match client.list_subscribers(timeout).await {
+                        Ok(response) => response,
+                        Err(e) => {
+                            tracing::error!("error listing subscribers from {coordinator}: {e}");
+                            continue;
+                        }
+                    };
+
+                    let enrolled_agents_this_coordinator =
+                        enrolled_agents.entry(coordinator).or_default();
+                    enrolled_agents_this_coordinator.extend(response.into_iter());
+                }
+
+                tracing::info!("{enrolled_agents:#?}");
+
+                let result = enrolled_agents;
+                serde_json::to_value(result)?
+            }
+        };
+
+        Ok(json_value)
     }
 }
 

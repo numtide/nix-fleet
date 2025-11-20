@@ -13,6 +13,7 @@ words = [
     "numtide",
     "openssh",
     "pkarr",
+    "pubkeys",
     "rtt",
     "serde",
     "substituters",
