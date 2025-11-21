@@ -221,6 +221,7 @@ pub mod facts {
     use std::str::FromStr;
 
     use anyhow::Context;
+    use better_commands::CmdOutput;
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Serialize, Deserialize)]
@@ -244,41 +245,51 @@ pub mod facts {
                 .map_err(|e| tracing::warn!("couldn't get machine machine data: {e}"))
                 .ok();
 
+            let filter_output_fn = |output: CmdOutput| -> Option<String> {
+                match output.clone().status_code() {
+                    Some(i) if i.is_negative() => return None,
+                    Some(_) | None => (),
+                };
+
+                output.stdout().and_then(|lines| {
+                    let non_empty_lines = lines
+                        .into_iter()
+                        .map(|l| l.content.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect::<Vec<_>>();
+
+                    if !non_empty_lines.is_empty() {
+                        Some(non_empty_lines.join("\n"))
+                    } else {
+                        None
+                    }
+                })
+            };
+
             let maybe_facter = tokio::task::spawn_blocking(|| {
-                better_commands::run(std::process::Command::new("facter").arg("--json"))
+                better_commands::run(
+                    std::process::Command::new("facter")
+                        .arg("--json")
+                        .arg("--no-ruby")
+                        .arg("--no-color"),
+                )
             })
             .await
             .context("running `facter` from PATH")
-            .map_err(|err| println!("{err}"))
-            .map(|output| {
-                output
-                    .stdout()
-                    .unwrap_or_default()
-                    .iter()
-                    .fold(String::new(), |acc, cur| {
-                        let cur_string = &cur.content;
-                        format!("{acc}{cur_string}\n")
-                    })
-            })
-            .ok();
+            .map(filter_output_fn)
+            .inspect_err(|e| tracing::error!("{e}"))
+            .ok()
+            .flatten();
 
             let maybe_nixos_facter = tokio::task::spawn_blocking(|| {
                 better_commands::run(&mut std::process::Command::new("nixos-facter"))
             })
             .await
             .context("running `nixos-facter` from PATH")
-            .map_err(|err| println!("{err}"))
-            .map(|output| {
-                output
-                    .stdout()
-                    .unwrap_or_default()
-                    .iter()
-                    .fold(String::new(), |acc, cur| {
-                        let cur_string = &cur.content;
-                        format!("{acc}{cur_string}\n")
-                    })
-            })
-            .ok();
+            .map(filter_output_fn)
+            .inspect_err(|e| tracing::error!("{e}"))
+            .ok()
+            .flatten();
 
             let facts = Facts {
                 os,

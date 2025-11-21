@@ -10,6 +10,7 @@ use super::*;
 use anyhow::Context;
 use iroh::SecretKey;
 use jsonpath_rust::JsonPath;
+use tracing_test::traced_test;
 
 struct TestKeyTuple {
     openssh_key: &'static str,
@@ -52,6 +53,7 @@ fn parses_openssh_key() {
     }
 }
 
+#[traced_test]
 #[tokio::test]
 async fn facts_can_be_gathered() {
     let facts = facts::Facts::try_from_environment().await.unwrap();
@@ -66,6 +68,11 @@ async fn facts_can_be_gathered() {
 
         let maybe_kernel = js.query("$.kernel").unwrap().first().unwrap().as_str();
         assert_eq!(maybe_kernel, Some("Linux"), "{facter}");
+
+        assert_eq!(
+            facts.maybe_nixos_facter, None,
+            "nixos-facter does not work in unit tests, hence it must be empty"
+        );
     } else if cfg!(target_os = "macos") {
         assert_eq!(facts.os, platforms::OS::MacOS);
         let facter = facts.maybe_facter.unwrap();
@@ -76,6 +83,11 @@ async fn facts_can_be_gathered() {
 
         let maybe_kernel = js.query("$.kernel").unwrap().first().unwrap().as_str();
         assert_eq!(maybe_kernel, Some("Darwin"), "{facter}");
+
+        assert_eq!(
+            facts.maybe_nixos_facter, None,
+            "nixos-facter is not available on macos"
+        );
     } else {
         tracing::warn!("unsupported target os")
     }
