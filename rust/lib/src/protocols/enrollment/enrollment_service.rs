@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use iroh::protocol::ProtocolHandler;
-use iroh::{Endpoint, PublicKey, SecretKey};
+use iroh::{PublicKey, SecretKey};
 use iroh_blobs::BlobsProtocol;
 use iroh_docs::api::Doc;
 use iroh_docs::Author;
@@ -59,9 +59,7 @@ pub struct EnrollmentServiceSubscriber {
 }
 
 struct EnrollmentServiceActor {
-    endpoint: Endpoint,
     blobs: BlobsProtocol,
-    docs: iroh_docs::protocol::Docs,
     default_author: Arc<Author>,
 
     /// The assumption behind this is that each node creates it with the same
@@ -75,7 +73,6 @@ impl EnrollmentServiceActor {
 
     async fn spawn(
         secret_key: SecretKey,
-        endpoint: Endpoint,
         blobs: BlobsProtocol,
         docs: iroh_docs::protocol::Docs,
     ) -> anyhow::Result<Client<EnrollmentServiceRequest>> {
@@ -85,9 +82,7 @@ impl EnrollmentServiceActor {
             ensure_node_root_doc(&docs, &secret_key.to_bytes()).await?;
 
         let actor = Self {
-            endpoint,
             blobs,
-            docs,
 
             default_author: Arc::new(default_author),
             node_root_doc: Arc::new(TokioMutex::new(node_root_doc)),
@@ -208,11 +203,7 @@ impl EnrollmentServiceActor {
 
 #[derive(Debug, Clone)]
 pub struct EnrollmentServiceApi {
-    endpoint: Endpoint,
-    blobs: BlobsProtocol,
-    docs: iroh_docs::protocol::Docs,
     client: Client<EnrollmentServiceRequest>,
-    node_root_doc: iroh_docs::api::Doc,
 }
 
 impl EnrollmentServiceApi {
@@ -230,27 +221,13 @@ impl EnrollmentServiceApi {
 
     pub async fn spawn(
         secret_key: SecretKey,
-        endpoint: Endpoint,
         blobs: BlobsProtocol,
         docs: iroh_docs::protocol::Docs,
     ) -> anyhow::Result<Self> {
-        let client = EnrollmentServiceActor::spawn(
-            secret_key.clone(),
-            endpoint.clone(),
-            blobs.clone(),
-            docs.clone(),
-        )
-        .await?;
+        let client =
+            EnrollmentServiceActor::spawn(secret_key.clone(), blobs.clone(), docs.clone()).await?;
 
-        let (_, node_root_doc) = ensure_node_root_doc(&docs, &secret_key.to_bytes()).await?;
-
-        Ok(Self {
-            endpoint,
-            blobs,
-            docs,
-            client,
-            node_root_doc,
-        })
+        Ok(Self { client })
     }
 }
 

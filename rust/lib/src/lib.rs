@@ -209,14 +209,9 @@ pub mod coordinator {
             .accept(NodeAdmin::ALPN, NodeAdmin)
             .accept(
                 enrollment_service::ALPN,
-                EnrollmentServiceApi::spawn(
-                    secret_key.clone(),
-                    endpoint.clone(),
-                    blobs.clone(),
-                    docs.clone(),
-                )
-                .await?
-                .expose()?,
+                EnrollmentServiceApi::spawn(secret_key.clone(), blobs.clone(), docs.clone())
+                    .await?
+                    .expose()?,
             );
 
         let router_builder = router_builder
@@ -229,7 +224,7 @@ pub mod coordinator {
             )
             .accept(
                 enrollment_service::ALPN,
-                EnrollmentServiceApi::spawn(secret_key, endpoint, blobs, docs)
+                EnrollmentServiceApi::spawn(secret_key, blobs, docs)
                     .await?
                     .expose()?,
             );
@@ -244,9 +239,8 @@ pub mod coordinator {
 }
 
 pub mod agent {
-    use iroh::{protocol::Router, PublicKey, SecretKey};
+    use iroh::{protocol::Router, SecretKey};
     use iroh_docs::engine::ProtectCallbackHandler;
-    use linked_hash_set::LinkedHashSet;
     use tracing::info;
 
     use crate::{admin::cli::AgentArgs, protocols::enrollment::enrollment_agent};

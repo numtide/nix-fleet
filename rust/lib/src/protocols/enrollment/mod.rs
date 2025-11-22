@@ -19,11 +19,6 @@ pub enum AgentInfo {
     },
 }
 
-enum AgentEnrollmentState<P> {
-    Announced,
-    Assigned(P),
-}
-
 const KEY_DERIVE_CONTEXT_AUTHOR: &str = "enrollment-default-author-0";
 const KEY_DERIVE_CONTEXT_NAMESPACE: &str = "enrollment-default-namespace-0";
 
@@ -62,7 +57,7 @@ mod tests {
             cli::{AdminArgs, AdminCmd, AgentArgs},
         },
         protocols::enrollment::enrollment_service::{
-            EnrolledServiceSubscribersT, EnrollmentServiceId, EnrollmentServiceSubscriber,
+            EnrolledServiceSubscribersT, EnrollmentServiceId,
         },
         test_utils::{ComponentAssets, RelayedTestContext},
     };

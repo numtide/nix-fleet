@@ -14,7 +14,6 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex as TokioMutex;
 
 use crate::admin::cli::AgentArgs;
-use crate::agent;
 use crate::facts::Facts;
 use crate::protocols::enrollment::enrollment_service::EnrollmentServiceClient;
 use crate::protocols::enrollment::ensure_node_root_doc;
@@ -44,7 +43,6 @@ pub struct EnrollmentServiceSubscription {
 struct EnrollmentAgentActor {
     endpoint: Endpoint,
     blobs: BlobsProtocol,
-    docs: iroh_docs::protocol::Docs,
     default_author: Arc<Author>,
 
     /// The assumption behind this is that each node creates it with the same
@@ -83,7 +81,6 @@ impl EnrollmentAgentActor {
         let actor = Self {
             endpoint,
             blobs,
-            docs,
 
             default_author: Arc::new(default_author),
             node_root_doc: Arc::new(TokioMutex::new(node_root_doc)),
@@ -244,9 +241,6 @@ impl EnrollmentAgentActor {
 
 #[derive(Debug, Clone)]
 pub struct EnrollmentAgentApi {
-    endpoint: Endpoint,
-    blobs: BlobsProtocol,
-    docs: iroh_docs::protocol::Docs,
     client: Client<EnrollmentAgentRequest>,
 }
 
@@ -279,12 +273,7 @@ impl EnrollmentAgentApi {
         )
         .await?;
 
-        Ok(Self {
-            endpoint,
-            blobs,
-            docs,
-            client,
-        })
+        Ok(Self { client })
     }
 }
 

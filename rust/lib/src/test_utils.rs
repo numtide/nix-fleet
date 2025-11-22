@@ -68,11 +68,11 @@ pub type ComponentTask = Arc<
 >;
 
 pub struct RelayedTestContext {
-    pub(crate) relay_server: iroh_relay::server::Server,
-    pub(crate) iroh_dns_http_server: iroh_dns_server::http::HttpServer,
-    pub(crate) relay_mode: Option<RelayMode>,
-    pub(crate) iroh_dns_http_url: url::Url,
-    pub(crate) component_tasks: ComponentTask,
+    pub relay_server: iroh_relay::server::Server,
+    pub iroh_dns_http_server: iroh_dns_server::http::HttpServer,
+    pub relay_mode: Option<RelayMode>,
+    pub iroh_dns_http_url: url::Url,
+    pub component_tasks: ComponentTask,
 }
 
 #[derive(Clone)]
