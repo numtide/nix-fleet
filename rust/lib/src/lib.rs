@@ -6,7 +6,7 @@ pub mod util {
 
     use anyhow::Context;
     use iroh::endpoint::Builder;
-    use iroh::{PublicKey, SecretKey};
+    use iroh::{PublicKey, RelayMode, SecretKey};
     use url::Url;
 
     // Reference code in iroh-node-util showing SSH key handling: https://github.com/n0-computer/iroh-node-util/blob/3e9702ad215b9b986c6d45e4762a8fbe241163b0/src/fs.rs#L11
@@ -122,14 +122,39 @@ pub mod util {
 
         let endpoint = builder.bind().await?;
 
-        if let Some(relay_mode) = relay_mode {
-            tracing::debug!("waiting for network to be online..");
-            tokio::time::timeout(tokio::time::Duration::from_millis(500), endpoint.online())
-                .await
-                .context(format!("waiting for home relay: {relay_mode:?}"))?;
+        match relay_mode {
+            Some(RelayMode::Disabled) | None => (),
+            Some(_) => {
+                tracing::debug!("waiting for network to be online..");
+                tokio::time::timeout(tokio::time::Duration::from_secs_f64(5.0), endpoint.online())
+                    .await
+                    .context(format!("waiting for home relay: {relay_mode:?}"))?;
+            }
         }
 
         Ok((secret_key, endpoint))
+    }
+
+    pub fn parse_relay_mode(input: &str) -> anyhow::Result<RelayMode> {
+        let cleaned = input.trim().to_lowercase();
+        let (variant, remainder) = cleaned.split_once(":").unwrap_or((&cleaned, ""));
+        let mode = match variant {
+            "disabled" => RelayMode::Disabled,
+            "default" => RelayMode::Default,
+            "staging" => RelayMode::Staging,
+            "custom" => {
+                if remainder.is_empty() {
+                    anyhow::bail!("custom needs an ip:port specification for a custom relay");
+                }
+
+                RelayMode::Disabled
+
+                // TODO: support this later
+            }
+            other => anyhow::bail!("unsupported relay mode string: {other}"),
+        };
+
+        Ok(mode)
     }
 }
 

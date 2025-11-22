@@ -7,28 +7,31 @@ coordinator-nodeid:
 agent-nodeid:
     echo {{AGENT_NODE_ID}}
 
-run-coordinator +args="":
+run-coordinator relay_mode="disabled" +args="":
     #!/usr/bin/env bash
     RUST_LOG=flt=trace,flt_lib=trace \
         cargo run -- \
             --maybe-secret-key=./fixtures/coordinator.ed25519 \
+            --relay-mode={{relay_mode}} \
         coordinator \
             {{args}}
 
-run-agent +args="":
+run-agent relay_mode="disabled" +args="":
     #!/usr/bin/env bash
     RUST_LOG=flt=trace,flt_lib=trace \
         cargo run -- \
             --maybe-secret-key=./fixtures/agent.ed25519 \
+            --relay-mode={{relay_mode}} \
         agent \
             --coordinators="{{ COORDINATIR_NODE_ID }}" \
             {{args}}
 
-run-admin +args="":
+run-admin relay_mode="disabled" +args="":
     #!/usr/bin/env bash
     RUST_LOG=flt=trace,flt_lib=trace \
         cargo run -- \
             --maybe-secret-key=./fixtures/admin.ed25519 \
+            --relay-mode={{relay_mode}} \
         admin \
             --coordinators="{{ COORDINATIR_NODE_ID }}" \
             \

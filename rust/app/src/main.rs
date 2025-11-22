@@ -4,6 +4,7 @@ use clap::{command, Parser, Subcommand};
 
 use flt_lib::{
     admin::cli::{AdminArgs, AgentArgs},
+    iroh::RelayMode,
     util::{get_endpoint, parse_openssh_ed25519_private},
 };
 
@@ -12,6 +13,10 @@ use flt_lib::{
 struct App {
     #[arg(long)]
     maybe_secret_key: Option<PathBuf>,
+
+    /// Choose the relay mode for incoming connections. Outgoing connections happen according to the remote node's relay mode.
+    #[arg(long, value_parser = flt_lib::util::parse_relay_mode)]
+    relay_mode: RelayMode,
 
     #[command(subcommand)]
     applet: Applet,
@@ -47,8 +52,7 @@ async fn main() -> anyhow::Result<()> {
 
     let (secret_key, endpoint) = get_endpoint(
         maybe_secret_key,
-        // TODO: make this configurable
-        None,
+        Some(args.relay_mode),
         flt_lib::util::Discoveries::default(),
     )
     .await?;
