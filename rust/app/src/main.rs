@@ -1,6 +1,11 @@
 use std::path::PathBuf;
 
+use anyhow::Context;
 use clap::{command, Parser, Subcommand};
+use tracing::info;
+use tracing_subscriber::{
+    fmt::time::ChronoLocal, layer::SubscriberExt, util::SubscriberInitExt, Layer,
+};
 
 use flt_lib::{
     admin::cli::{AdminArgs, AgentArgs},
@@ -29,12 +34,18 @@ enum Applet {
     Admin(AdminArgs),
 }
 
-use tracing::info;
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Install global subscriber configured based on RUST_LOG env-var.
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::io::stderr)
+                .with_timer(ChronoLocal::rfc_3339())
+                .with_filter(tracing_subscriber::EnvFilter::from_default_env()),
+        )
+        .try_init()
+        .context("initializing tracing")?;
 
     info!("starting up!");
 
@@ -64,6 +75,14 @@ async fn main() -> anyhow::Result<()> {
         }
         Applet::Admin(admin_args) => flt_lib::admin::run(endpoint.clone(), admin_args).await,
     };
+
+    let result = result
+        .and_then(|value| {
+            flt_lib::serde_json::to_string_pretty(&value).map_err(|e| anyhow::anyhow!("{e}"))
+        })
+        .inspect(|json| {
+            println!("{json}");
+        });
 
     endpoint.close().await;
 

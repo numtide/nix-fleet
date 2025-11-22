@@ -1,4 +1,5 @@
 pub use iroh;
+pub use serde_json;
 pub use tokio;
 
 pub mod util {
@@ -184,7 +185,7 @@ pub mod coordinator {
     ) -> anyhow::Result<serde_json::Value> {
         let node_id = endpoint.id();
         let bind_info = endpoint.bound_sockets();
-        info!("node_id: {node_id}; listening on {bind_info:?}");
+        info!("node_id: {node_id} listening on {bind_info:?}");
 
         // Enable iroh-docs and its dependencies
         let (protect_callback_handler, protect_callback) = ProtectCallbackHandler::new();
@@ -257,7 +258,7 @@ pub mod agent {
     ) -> anyhow::Result<serde_json::Value> {
         let node_id = endpoint.id();
         let bind_info = endpoint.bound_sockets();
-        info!("node_id: {node_id}; listening on {bind_info:?}");
+        info!("node_id: {node_id} listening on {bind_info:?}");
 
         // Enable iroh-docs and its dependencies
         let (protect_callback_handler, protect_callback) = ProtectCallbackHandler::new();
@@ -494,7 +495,7 @@ pub mod admin {
 
                 let result = client.get_facts().await?;
 
-                tracing::info!("{result:#?}");
+                tracing::debug!("response: {result:#?}");
 
                 serde_json::to_value(result)?
             }
@@ -521,7 +522,7 @@ pub mod admin {
                     enrolled_agents_this_coordinator.extend(response.into_iter());
                 }
 
-                tracing::info!("{enrolled_agents:#?}");
+                tracing::debug!("agents: {enrolled_agents:#?}");
 
                 let result = enrolled_agents;
                 serde_json::to_value(result)?
