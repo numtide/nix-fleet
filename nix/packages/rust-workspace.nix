@@ -18,6 +18,13 @@ let
     filter =
       path: type: (pkgs.lib.hasInfix "/fixtures/" path) || (craneLib.filterCargoSources path type);
   };
+  nativeRuntimeInputs = [
+    pkgs.facter
+  ]
+  ++ (pkgs.lib.lists.optionals pkgs.stdenv.hostPlatform.isLinux [
+    pkgs.nixos-facter
+  ]);
+
   commonArgs = {
     inherit src;
     strictDeps = true;
@@ -47,6 +54,13 @@ craneLib.buildPackage (
     # NB: we disable tests since we'll run them all via cargo-nextest
     doCheck = false;
 
+    buildInputs = [ pkgs.makeWrapper ];
+
+    postInstall = ''
+      wrapProgram $out/bin/flt \
+        --suffix PATH : ${pkgs.lib.makeBinPath nativeRuntimeInputs}
+    '';
+
     passthru.tests = {
       clippy = craneLib.cargoClippy (
         commonArgs
@@ -73,15 +87,11 @@ craneLib.buildPackage (
         // {
           inherit cargoArtifacts;
 
+          nativeBuildInputs = nativeRuntimeInputs;
+
           RUST_BACKTRACE = 1;
 
           # native test binaries go here
-          nativeBuildInputs = [
-            pkgs.facter
-          ]
-          ++ (pkgs.lib.lists.optionals pkgs.stdenv.hostPlatform.isLinux [
-            pkgs.nixos-facter
-          ]);
           partitions = 1;
           partitionType = "count";
         }
