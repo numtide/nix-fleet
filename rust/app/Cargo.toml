@@ -8,7 +8,14 @@ license.workspace = true
 flt_lib = { path = "../lib" }
 
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["chrono", "time"] }
 anyhow = { workspace = true }
 tokio = { workspace = true }
 clap = { workspace = true }
+
+[features]
+
+default = []
+
+# Not used but currently needed because zed is configured to pass it
+test = []

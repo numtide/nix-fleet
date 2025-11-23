@@ -23,16 +23,16 @@ fn echo_completes_bench(c: &mut Criterion) {
         .build()
         .unwrap();
 
-    let ctx = rt.block_on(RelayedTestContext::new());
-
     for mode in modes {
+        let ctx = rt.block_on(RelayedTestContext::new());
+
         c.bench_function(&format!("echo_completes_{:?}", mode), |b| {
             b.to_async(&rt).iter(|| async {
                 #[allow(clippy::unit_arg)]
                 std::hint::black_box(
                     run_echo_hash_with_context(
                         &ctx,
-                        mode.clone(),
+                        mode,
                         2,
                         flt_lib::protocols::echo_hash::rpc::EchoHashRpcApi::MAX_CHUNK_SIZE + 1,
                         10.0,

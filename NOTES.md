@@ -71,6 +71,11 @@ This frees up the choice of protocols for transferring the artifacts, e.g. there
 * Could CAStore be embedded in the rust application and use iroh for transport?
 * What is the consensus mechanism among CAStore nodes, if any?
 
+* Snix Store Copy command impl: https://git.snix.dev/snix/snix/src/commit/6b08b3382f68417111a15721be2c79e75b0d0c23/snix/store/src/bin/snix-store.rs#L359
+* nar-bridge https://git.snix.dev/snix/snix/src/branch/canon/snix/nar-bridge that redirects from Nix HTTP Cache protocol into Snix store. could be reused to redirect into iroh-docs/iroh-blobs
+
+
 ---
+
 
 [iroh]: https://www.iroh.computer/
