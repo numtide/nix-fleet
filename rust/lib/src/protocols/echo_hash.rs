@@ -885,7 +885,6 @@ pub mod docs {
 #[cfg(any(test, feature = "test"))]
 pub mod tests {
     use test_case::test_case;
-    use tracing_test::traced_test;
 
     use crate::{
         admin::{
@@ -946,8 +945,8 @@ pub mod tests {
         .unwrap();
     }
 
-    #[traced_test]
     #[tokio::test]
+    #[test_log::test]
     #[test_case(SendMode::Native, 10, 1024, 1.0; "Native")]
     #[test_case(SendMode::Rpc, 10, 1024, 1.0; "Rpc")]
     #[test_case(SendMode::RpcStream, 10, 1024, 1.0; "RpcStream")]
