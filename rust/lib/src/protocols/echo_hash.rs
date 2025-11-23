@@ -923,17 +923,17 @@ pub mod tests {
                     admin::run(
                         endpoint,
                         AdminArgs {
+                            node_id: coordinator_assets.pubkey,
                             cmd: AdminCmd::EchoHash {
                                 args: EchoHashArgs {
                                     number,
-                                    node_id: coordinator_assets.pubkey,
                                     msg: "hello".to_string(),
                                     size,
                                     timeout,
                                     mode,
+                                    node_id: coordinator_assets.pubkey,
                                 },
                             },
-                            coordinators: vec![],
                             timeout,
                         },
                     )

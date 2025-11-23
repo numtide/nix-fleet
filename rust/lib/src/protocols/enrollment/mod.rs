@@ -49,16 +49,13 @@ pub mod enrollment_service;
 #[cfg(test)]
 mod tests {
     use anyhow::Context;
-    use linked_hash_map::LinkedHashMap;
 
     use crate::{
         admin::{
             self,
-            cli::{AdminArgs, AdminCmd, AgentArgs},
+            cli::{AdminArgs, AdminCmd, AgentArgs, EnrollmentServiceCmd},
         },
-        protocols::enrollment::enrollment_service::{
-            EnrolledServiceSubscribersT, EnrollmentServiceId,
-        },
+        protocols::enrollment::enrollment_service::EnrolledServiceSubscribersT,
         test_utils::{ComponentAssets, RelayedTestContext},
     };
 
@@ -89,7 +86,7 @@ mod tests {
                             key,
                             endpoint,
                             AgentArgs {
-                                coordinators: vec![coordinator_pubkey],
+                                maybe_coordinator: Some(coordinator_pubkey),
                                 ..Default::default()
                             },
                         )
@@ -113,9 +110,11 @@ mod tests {
         admin::run(
             admin_assets.endpoint.clone(),
             AdminArgs {
-                cmd: AdminCmd::ListAgents {},
-                coordinators: vec![coordinator_assets.pubkey],
+                node_id: coordinator_assets.pubkey,
                 timeout: 0.5,
+                cmd: AdminCmd::EnrollmentService {
+                    cmd: EnrollmentServiceCmd::ListAgents,
+                },
             },
         )
         .await
@@ -140,26 +139,22 @@ mod tests {
                 let value = admin::run(
                     admin_assets.endpoint.clone(),
                     AdminArgs {
-                        cmd: AdminCmd::ListAgents {},
-                        coordinators: vec![coordinator_assets.pubkey],
+                        node_id: coordinator_assets.pubkey,
                         timeout: 0.5,
+                        cmd: AdminCmd::EnrollmentService {
+                            cmd: EnrollmentServiceCmd::ListAgents,
+                        },
                     },
                 )
                 .await
                 .expect("coordinator is online now");
 
-                let enrolled_agents: LinkedHashMap<
-                    EnrollmentServiceId,
-                    EnrolledServiceSubscribersT,
-                > = serde_json::from_value(value.clone())
-                    .context(format!("deserializing {value:#?})"))
-                    .unwrap();
+                let enrolled_agents: EnrolledServiceSubscribersT =
+                    serde_json::from_value(value.clone())
+                        .context(format!("deserializing {value:#?})"))
+                        .unwrap();
 
-                if enrolled_agents
-                    .get(&coordinator_assets.pubkey)
-                    .unwrap()
-                    .contains_key(&agent_assets.pubkey)
-                {
+                if enrolled_agents.contains_key(&agent_assets.pubkey) {
                     break enrolled_agents;
                 } else {
                     tracing::error!("agent should be enrolled at this point: {enrolled_agents:#?}");
