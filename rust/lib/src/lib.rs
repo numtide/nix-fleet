@@ -380,14 +380,8 @@ pub mod facts {
 }
 
 pub mod admin {
-    use linked_hash_map::LinkedHashMap;
 
-    use crate::{
-        admin::cli::AdminArgs,
-        protocols::enrollment::enrollment_service::{
-            EnrolledServiceSubscribersT, EnrollmentServiceId,
-        },
-    };
+    use crate::admin::cli::AdminArgs;
 
     pub mod cli {
         use clap::{Args, Subcommand};
@@ -398,8 +392,8 @@ pub mod admin {
         #[command(version, about)]
         pub struct AgentArgs {
             /// Pass one or multiple NodeIds that are used as coordinators
-            #[arg(long)]
-            pub coordinators: Vec<iroh::PublicKey>,
+            #[arg(long = "coordinator")]
+            pub maybe_coordinator: Option<iroh::PublicKey>,
 
             /// Loop interval for the loop that ensures the subscription to the enrollment service remain intact.
             #[arg(long)]
@@ -410,14 +404,14 @@ pub mod admin {
         #[derive(Debug, Clone, Args)]
         #[command(version, about)]
         pub struct AdminArgs {
-            /// Pass one or multiple NodeIds that are used as coordinators
-            #[arg(long)]
-            pub coordinators: Vec<PublicKey>,
-
             /// Timeout duration in seconds for connecting to the remote request, given in floating points.
             // TODO: create an issue on the irpc repo about connections sometimes taking 5 seconds to initiate
             #[arg(long, default_value_t = 6.0f64)]
             pub timeout: f64,
+
+            /// The node to connect to for the given subcommand.
+            #[arg(long)]
+            pub node_id: PublicKey,
 
             /// The admin command to call.
             #[command(subcommand)]
@@ -433,16 +427,35 @@ pub mod admin {
                 args: crate::protocols::echo_hash::EchoHashArgs,
             },
 
-            Ping {
-                node_id: PublicKey,
+            Ping {},
+
+            EnrollmentAgent {
+                #[command(subcommand)]
+                cmd: EnrollmentAgentCmd,
             },
 
-            GetFacts {
-                node_id: PublicKey,
+            EnrollmentService {
+                #[command(subcommand)]
+                cmd: EnrollmentServiceCmd,
             },
+        }
+
+        /// All enrollment service subcommands
+        #[derive(Debug, Clone, Subcommand)]
+        pub enum EnrollmentServiceCmd {
+            Ping {},
 
             /// Retrieve a list of agents
             ListAgents,
+        }
+
+        /// All enrollment agent subcommands
+        #[derive(Debug, Clone, Subcommand)]
+        pub enum EnrollmentAgentCmd {
+            Ping {},
+
+            /// Get facts from an agent directly.
+            GetFacts {},
         }
     }
 
@@ -453,9 +466,9 @@ pub mod admin {
         admin_args: AdminArgs,
     ) -> anyhow::Result<serde_json::Value> {
         let AdminArgs {
-            coordinators,
             timeout,
             cmd,
+            node_id,
         } = admin_args;
 
         let timeout = std::time::Duration::from_secs_f64(timeout);
@@ -465,7 +478,7 @@ pub mod admin {
                 serde_json::to_value(crate::protocols::echo_hash::send(endpoint, args).await?)?
             }
 
-            cli::AdminCmd::Ping { node_id } => {
+            cli::AdminCmd::Ping {} => {
                 let start = tokio::time::Instant::now();
                 let client =
                     crate::protocols::enrollment::enrollment_agent::EnrollmentAgentClient::connect(
@@ -480,48 +493,47 @@ pub mod admin {
 
                 serde_json::to_value(())?
             }
-            cli::AdminCmd::GetFacts { node_id } => {
+            cli::AdminCmd::EnrollmentAgent { cmd } => {
                 let client =
                     crate::protocols::enrollment::enrollment_agent::EnrollmentAgentClient::connect(
                         endpoint, node_id,
                     )
                     .await?;
 
-                let result = client.get_facts().await?;
+                match cmd {
+                    cli::EnrollmentAgentCmd::Ping {} => {
+                        let duration = client.ping().await?;
 
-                tracing::debug!("response: {result:#?}");
+                        serde_json::to_value(format!("ping to {node_id} took {duration:?}"))?
+                    }
+                    cli::EnrollmentAgentCmd::GetFacts {} => {
+                        let result = client.get_facts().await?;
 
-                serde_json::to_value(result)?
+                        serde_json::to_value(result)?
+                    }
+                }
             }
-            cli::AdminCmd::ListAgents => {
-                let mut enrolled_agents: LinkedHashMap<
-                    EnrollmentServiceId,
-                    EnrolledServiceSubscribersT,
-                > = Default::default();
-                for coordinator in coordinators {
-                    let client = crate::protocols::enrollment::enrollment_service::EnrollmentServiceClient::connect(
-                            endpoint.clone(), coordinator, timeout,
+            cli::AdminCmd::EnrollmentService { cmd } => {
+                let client = crate::protocols::enrollment::enrollment_service::EnrollmentServiceClient::connect(
+                            endpoint.clone(), node_id, timeout,
                         ).await?;
 
-                    let response = match client.list_subscribers(timeout).await {
-                        Ok(response) => response,
-                        Err(e) => {
-                            tracing::error!("error listing subscribers from {coordinator}: {e}");
-                            continue;
-                        }
-                    };
+                match cmd {
+                    cli::EnrollmentServiceCmd::Ping {} => {
+                        let duration = client.ping(timeout).await?;
 
-                    let enrolled_agents_this_coordinator =
-                        enrolled_agents.entry(coordinator).or_default();
-                    enrolled_agents_this_coordinator.extend(response.into_iter());
+                        serde_json::to_value(duration)?
+                    }
+                    cli::EnrollmentServiceCmd::ListAgents => {
+                        let response = client.list_subscribers(timeout).await?;
+
+                        serde_json::to_value(response)?
+                    }
                 }
-
-                tracing::debug!("agents: {enrolled_agents:#?}");
-
-                let result = enrolled_agents;
-                serde_json::to_value(result)?
             }
         };
+
+        tracing::debug!("response: {json_value:#?}");
 
         Ok(json_value)
     }

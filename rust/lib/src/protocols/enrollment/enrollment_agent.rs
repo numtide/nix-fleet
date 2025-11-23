@@ -51,7 +51,7 @@ struct EnrollmentAgentActor {
     node_root_doc: Arc<TokioMutex<Doc>>,
 
     /// Coordinators that are desired to be connected to.
-    initial_enrollment_services_desired: LinkedHashSet<PublicKey>,
+    enrollment_services_desired: LinkedHashSet<PublicKey>,
     enrollment_service_subscription_reconcile_interval: std::time::Duration,
 }
 
@@ -68,10 +68,14 @@ impl EnrollmentAgentActor {
         agent_args: AgentArgs,
     ) -> anyhow::Result<Client<EnrollmentAgentRequest>> {
         let AgentArgs {
-            coordinators,
+            maybe_coordinator,
             maybe_subscribe_loop_interval_seconds,
         } = agent_args;
-        let enrollment_service_pubkeys = LinkedHashSet::from_iter(coordinators);
+
+        let mut enrollment_service_pubkeys: LinkedHashSet<PublicKey> = Default::default();
+        if let Some(coordinator) = maybe_coordinator {
+            enrollment_service_pubkeys.insert(coordinator);
+        }
 
         let (tx, rx) = tokio::sync::mpsc::channel(1);
 
@@ -85,7 +89,7 @@ impl EnrollmentAgentActor {
             default_author: Arc::new(default_author),
             node_root_doc: Arc::new(TokioMutex::new(node_root_doc)),
 
-            initial_enrollment_services_desired: enrollment_service_pubkeys,
+            enrollment_services_desired: enrollment_service_pubkeys,
             enrollment_service_subscription_reconcile_interval: std::time::Duration::from_secs_f64(
                 maybe_subscribe_loop_interval_seconds
                     .unwrap_or(Self::DEFAULT_ENROLLMENT_SERVICE_SUBSCRIPTION_RECONCILE_INTERVAL),
@@ -124,7 +128,7 @@ impl EnrollmentAgentActor {
         );
 
         // Ensure the subscription to all desired services is intact.
-        for pubkey in &self.initial_enrollment_services_desired {
+        for pubkey in &self.enrollment_services_desired {
             let subscription_for_pubkey =
                 enrollment_service_subscriptions.entry(*pubkey).or_default();
 
