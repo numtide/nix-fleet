@@ -18,14 +18,14 @@ Within this Epic the items below shall be answered architecturally and proven by
 
 Outcome: Design of the overall architecture and component internals, issue definitions, working components based on PoT code
 
-#### ***[60 %] Milestone A***: Network connectivity and protocols for synchronous/asynchronous messaging and routed/NAT'ed connections
+#### ***[100 %] Milestone A***: Network connectivity and protocols for synchronous/asynchronous messaging and routed/NAT'ed connections
 
 ##### Acceptance Criteria
 - [x] AC1: The Coordinator can provide a directly addressable network identity and interface so that Admins and Agents can be configured to connect with a specific Coordinator and effectively form a complete network.
 - [x] AC2: Connectivity support for standalone WAN and non-WAN deployments.
 - [x] AC3: Components can pass custom protocol messages over the network.
 - [x] AC4: There's an extensible mechanism by which a component can submit messages to the Coordinator that caches messages to guarantee eventual delivery, disregarding online-status of any component at the time of original message creation.
-- [ ] AC5: The message delivery cache persists across component restarts.
+- [x] AC5: The message delivery cache persists across component restarts.
 
 ##### Solving AC1: [Iroh][] for node connectivity
 At its core Iroh is a P2P framework that provides resilient connectivity between nodes.
@@ -146,9 +146,12 @@ sequenceDiagram
 
 In conclusion this pattern is promising and I'm going to try it out for subsequent features like synchronous update submission and asynchronous distribution.
 
-#### Solving AC5: TODO
+#### Solving AC5: persistence through iroh-docs and iroh-blobs
+iroh-docs supports persisting its data via the [underlying iroh-blobs filesystem store](https://docs.rs/iroh-blobs/0.97.0/iroh_blobs/store/fs/struct.FsStore.html).
 
-- TODO: evaluate whether the iroh-docs database persistence satisfies the AC
+I've been able to confirm that the persistence works as expected. [the test called "admin_can_get_subscriber_facts_via_coordinator_after_coordinator_restart"](https://github.com/numtide/nix-fleet/blob/c3994f5907b2b308780697e541f22794ba1fd525/rust/lib/src/protocols/enrollment/mod.rs#L223-L232) confirms that the Coordinator remembers previously enrolled Agents after a restart of the Coordinator.
+
+I conclude that the evidence is in support of continuing with this set up and use it to implement subsequent features.
 
 #### ***[0 %] Milestone B***: Authentication and Authorization Model, credential bootstrap flow for initial Admin, Coordinator, and Agent nodes
 
