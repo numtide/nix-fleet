@@ -34,7 +34,7 @@ futures-util = "0.3.31"
 
 iroh-relay = { version = "0.95.0", features = [ "server", "test-utils" ], optional = true }
 iroh-dns-server = { version = "0.95.0", optional = true}
-tracing-test = { version = "0.2.5", features = ["no-env-filter"], optional = true}
+test-log = { version = "0.2.18", features = ["trace"], optional = true }
 criterion = { version = "0.7.0", features = ["async", "stable"], optional = true }
 test-case = { version = "3.3.1", optional = true }
 chrono = { version = "0.4.42", features = ["serde", "pure-rust-locales"] }
@@ -62,6 +62,6 @@ test = [
     "dep:iroh-dns-server",
     "dep:iroh-relay",
     "dep:test-case",
-    "dep:tracing-test",
+    "dep:test-log",
     "dep:criterion",
 ]

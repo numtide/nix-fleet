@@ -31,4 +31,6 @@ craneLib.devShell {
     pkgs.cargo-machete
     pkgs.gnuplot
   ];
+
+  RUST_LOG = "flt=trace,flt_lib=trace";
 }

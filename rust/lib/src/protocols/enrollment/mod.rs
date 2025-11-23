@@ -66,6 +66,7 @@ mod tests {
     /// - [x] Assert Admin can reach Coordinator
     /// - [x] Assert Agent is listed in information provided to Admin by Coordinator
     #[tokio::test]
+    #[test_log::test]
     async fn admin_can_list_agents_via_coordinator() {
         let ctx = RelayedTestContext::new().await;
 

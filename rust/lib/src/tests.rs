@@ -2,7 +2,6 @@ use super::*;
 
 use anyhow::Context;
 use jsonpath_rust::JsonPath;
-use tracing_test::traced_test;
 
 struct TestKeyTuple {
     openssh_key: &'static str,
@@ -45,8 +44,8 @@ fn parses_openssh_key() {
     }
 }
 
-#[traced_test]
 #[tokio::test]
+#[test_log::test]
 async fn facts_can_be_gathered() {
     let facts = facts::Facts::try_from_environment().await.unwrap();
 
