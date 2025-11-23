@@ -24,7 +24,7 @@ Outcome: Design of the overall architecture and component internals, issue defin
 - [x] AC1: The Coordinator can provide a directly addressable network identity and interface so that Admins and Agents can be configured to connect with a specific Coordinator and effectively form a complete network.
 - [x] AC2: Connectivity support for standalone WAN and non-WAN deployments.
 - [x] AC3: Components can pass custom protocol messages over the network.
-- [ ] AC4: There's an extensible mechanism by which a component can submit messages to the Coordinator that caches messages to guarantee eventual delivery, disregarding online-status of any component at the time of original message creation.
+- [x] AC4: There's an extensible mechanism by which a component can submit messages to the Coordinator that caches messages to guarantee eventual delivery, disregarding online-status of any component at the time of original message creation.
 - [ ] AC5: The message delivery cache persists across component restarts.
 
 ##### Solving AC1: [Iroh][] for node connectivity
@@ -69,14 +69,12 @@ The result is an approximate 20% overhead in the overall benchmark performance f
 
 At the current phase I'm concluding this to be acceptable and will opt for `irpc` to benefit from the higher-level building blocks. I'm optimistic that sufficient optimization is possible *if* the protocol transfer speeds turn out to be a bottleneck.
 
-##### Solving AC4: WIP
-Here I assume that the Coordinator can be a long-running process and with persistence.
-
+##### Solving AC4: Combine irpc and iroh-docs for sync and async messaging
 `irpc` does not provide caching and the remote endpoint needs to be online for a successful message transmission.
 Retries would need to be manually implemented between Admins and the Coordinator, as well as in between the Coordinator and the Agents.
 This is in-line with the central role of the Coordinator in this phase.
 
-So the goal here is to identify the highest level SDK and libraries for eventual i.e. asynchronous message delivery.
+The goal here is to identify the highest level SDK and libraries for eventual i.e. asynchronous message delivery.
 
 There's a [collection of existing protocols](https://www.iroh.computer/proto) which can be built atop of.
 
@@ -86,9 +84,67 @@ Here I'm highlighting the following three that are maintained by the core team a
 * [iroh-docs](https://www.iroh.computer/proto/iroh-docs): Composes iroh-blobs and iroh-gossip to enable multi-dimensional key-value documents with an eventual consistency synchronization protocol. It supports in-memory and persistent storage for documents.
 
 ##### Evaluating [iroh-docs]
-Given its eventual consistency properties, iroh-docs provides runtime-caching for retries out-of-the box.
+Given its eventual consistency properties, iroh-docs is a viable candidate to provide runtime-caching for retries out-of-the box.
 
-- TODO: evaluate single-writer iroh-docs documents for low-complexity message distribution.
+Here I evaluate a solution that combines synchronous calls via a custom irpc protocol and asynchronous data exchange using iroh-docs.
+To avoid avoid the complexity that multiple distributed writers would bring I focus on single-writer documents until at a later stage in the project.
+
+The write and read and write capabilities in iroh-docs consist of asymmetric ed25519 key pairs. As well as the author identities which are used to create and optionally sign document entries.
+For operation simplicity I've chosen [to derive these key-pairs](https://github.com/numtide/nix-fleet/blob/1b372629b41ba901e2a0ddfe6619d6f41827bd97/rust/lib/src/protocols/enrollment/mod.rs#L29-L48) from the node's main identity key-pair.
+
+As the evaluation scenario for this pattern I use the a simple version of synchronous Agent enrollment with the Coordinator via irpc, and the continuous delivery of system facts via iroh-docs from the Agent to the Coordinator.
+The [admin_can_get_subscriber_facts_via_coordinator test](https://github.com/numtide/nix-fleet/blob/1b372629b41ba901e2a0ddfe6619d6f41827bd97/rust/lib/src/protocols/enrollment/mod.rs#L181) asserts the functionality of this pattern. The following sequence diagram visualizes the tested workflow:
+
+```mermaid
+sequenceDiagram
+    participant Coordinator
+    participant EnrollmentServiceAPI
+    participant EnrollmentServiceActor
+    participant Agent
+    participant EnrollmentAgentAPI
+    participant EnrollmentAgentActor
+
+    %% Coordinator Startup Sequence
+    Coordinator->>Coordinator: Starts up, initializes endpoint with secret key and relay mode
+    Coordinator->>Coordinator: Sets up blob store, gossip, and docs protocols
+    Coordinator->>EnrollmentServiceAPI: Spawns EnrollmentServiceAPI with secret key, blobs, and docs
+    EnrollmentServiceAPI->>EnrollmentServiceActor: Creates EnrollmentServiceActor
+    EnrollmentServiceActor->>EnrollmentServiceActor: Derives default author from secret key
+    EnrollmentServiceActor->>EnrollmentServiceActor: Initializes node root document (ensures doc and author exist)
+    EnrollmentServiceAPI->>Coordinator: Router accepts EnrollmentServiceAPI protocol and exposes it
+    Coordinator->>Coordinator: Router fully set up, listening for connections
+
+    %% Agent Startup Sequence
+    Agent->>Agent: Starts up, initializes endpoint with secret key and relay mode
+    Agent->>Agent: Sets up blob store, gossip, and docs protocols
+    Agent->>EnrollmentAgentAPI: Spawns EnrollmentAgentAPI with secret key, endpoint, blobs, docs, and agent args (e.g., coordinator pubkey)
+    EnrollmentAgentAPI->>EnrollmentAgentActor: Creates EnrollmentAgentActor
+    EnrollmentAgentActor->>EnrollmentAgentActor: Derives default author from secret key
+    EnrollmentAgentActor->>EnrollmentAgentActor: Initializes node root document
+    EnrollmentAgentActor->>EnrollmentAgentActor: Initializes facts document (separate doc for sharing facts)
+    EnrollmentAgentActor->>EnrollmentAgentActor: Spawns background facts update loop (updates facts every ~60s)
+    EnrollmentAgentActor->>EnrollmentAgentActor: Spawns background subscription reconcile loop (reconciles subscriptions every ~10s)
+    EnrollmentAgentAPI->>Agent: Router accepts EnrollmentAgentAPI protocol and exposes it
+    Agent->>Agent: Router fully set up, agent is active
+
+    %% Agent Subscription Loop (first run)
+    EnrollmentAgentActor->>EnrollmentAgentActor: Subscription reconcile loop starts (first iteration)
+    EnrollmentAgentActor->>Coordinator: Connects to Coordinator's EnrollmentServiceAPI
+    EnrollmentAgentActor->>Coordinator: Sends subscribe request with agent's pubkey and facts document ticket
+    EnrollmentAgentActor->>EnrollmentAgentActor: Updates local subscription state (e.g., last successful check timestamp)
+
+    %% Coordinator Response to Subscribe
+    Coordinator->>EnrollmentServiceActor: Receives subscribe request via EnrollmentServiceAPI
+    EnrollmentServiceActor->>EnrollmentServiceActor: Validates and processes request
+    EnrollmentServiceActor->>EnrollmentServiceActor: Imports the facts document ticket into docs
+    EnrollmentServiceActor->>EnrollmentServiceActor: Starts syncing facts doc with agent's pubkey (background sync begins)
+    EnrollmentServiceActor->>EnrollmentServiceActor: Updates enrolled subscribers map (adds agent with timestamp)
+    EnrollmentServiceActor->>EnrollmentServiceActor: Persists updated subscribers list to node root document
+    EnrollmentServiceActor->>Coordinator: Responds to agent with SubscribeResponse (success)
+    EnrollmentAgentActor->>EnrollmentAgentActor: Marks subscription reconcile loop iteration as complete (waits for next interval)
+```
+
+In conclusion this pattern is promising and I'm going to try it out for subsequent features like synchronous update submission and asynchronous distribution.
 
 #### Solving AC5: TODO
 
