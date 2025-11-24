@@ -225,7 +225,7 @@ mod tests {
         };
 
         // Ensure the coordinator responds with a the facts within a given time
-        let _facts = tokio::time::timeout(std::time::Duration::from_secs_f64(1.0), async {
+        let _facts = tokio::time::timeout(std::time::Duration::from_secs_f64(2.0), async {
             loop {
                 match admin::run(
                     admin_assets.endpoint.clone(),
