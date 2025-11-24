@@ -6,15 +6,19 @@ use iroh::protocol::ProtocolHandler;
 use iroh::{PublicKey, SecretKey};
 use iroh_blobs::BlobsProtocol;
 use iroh_docs::api::Doc;
-use iroh_docs::Author;
-use irpc::{rpc_requests, Client};
+use iroh_docs::protocol::Docs;
+use iroh_docs::store::{QueryBuilder, SingleLatestPerKeyQuery};
+use iroh_docs::{Author, DocTicket};
+use irpc::{rpc_requests, Client, WithChannels};
 use linked_hash_map::LinkedHashMap;
 use serde::{Deserialize, Serialize};
-use strum::IntoDiscriminant;
 use tokio::sync::Mutex as TokioMutex;
 
 use crate::facts::Facts;
-use crate::protocols::enrollment::{ensure_node_root_doc, AgentInfo, AgentInfoDiscriminants};
+use crate::protocols::enrollment::{
+    ensure_node_doc_with_derived_keys, DOC_KEY_DERIVE_CONTEXT_NAMESPACE_ROOT_0,
+    DOC_KEY_FACTS_LATEST,
+};
 
 pub const ALPN: &[u8] = b"nix-fleet/enrollment/service/0";
 
@@ -38,7 +42,7 @@ enum EnrollmentServiceRequest {
     #[wrap(Subscribe)]
     Subscribe {
         node_id: PublicKey,
-        agent_info: AgentInfo,
+        facts_doc_ticket: Box<DocTicket>,
     },
 
     /// A node announces itself for tracking.
@@ -47,25 +51,43 @@ enum EnrollmentServiceRequest {
     )]
     #[wrap(ListSubscribers)]
     ListSubscribers {},
+
+    /// Retrieve facts for a given subscriber
+    #[rpc(
+        tx=irpc::channel::oneshot::Sender<anyhow::Result<Facts, String>>
+    )]
+    #[wrap(GetSubcriberFacts)]
+    GetSubcriberFacts { node_id: PublicKey },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct SubscribeResponse {}
+pub struct SubscribeResponse {}
 
 #[derive(Debug, Serialize, Deserialize, Hash, PartialEq, Eq, Default)]
 pub struct EnrollmentServiceSubscriber {
-    info: AgentInfoDiscriminants,
     last_subscription_confirmed: DateTime<Utc>,
+    facts_latest_doc_ticket_json: String,
 }
 
+impl EnrollmentServiceSubscriber {
+    /// Retrieves the latest facts and returns them if available.
+    pub async fn facts_latest_doc_ticket(&self) -> anyhow::Result<DocTicket> {
+        Ok(serde_json::from_str(&self.facts_latest_doc_ticket_json)?)
+    }
+}
+
+/// Actor for the enrollment service.
+///
+/// The assumption behind the docs is that each node creates it with the same
+/// secret that's used for communications, tying this document to its node
+/// identity.
 struct EnrollmentServiceActor {
     blobs: BlobsProtocol,
+    docs: Docs,
     default_author: Arc<Author>,
 
-    /// The assumption behind this is that each node creates it with the same
-    /// secret that's used for communications, tying this document to its node
-    /// identity.
-    node_root_doc: Arc<TokioMutex<Doc>>,
+    /// Local-only root node document for persistence of settings and state.
+    node_doc_root: Arc<TokioMutex<Doc>>,
 }
 
 impl EnrollmentServiceActor {
@@ -74,18 +96,23 @@ impl EnrollmentServiceActor {
     async fn spawn(
         secret_key: SecretKey,
         blobs: BlobsProtocol,
-        docs: iroh_docs::protocol::Docs,
+        docs: Docs,
     ) -> anyhow::Result<Client<EnrollmentServiceRequest>> {
         let (tx, rx) = tokio::sync::mpsc::channel(1);
 
-        let (default_author, node_root_doc) =
-            ensure_node_root_doc(&docs, &secret_key.to_bytes()).await?;
+        let (default_author, node_doc_root) = ensure_node_doc_with_derived_keys(
+            &docs,
+            &secret_key.to_bytes(),
+            DOC_KEY_DERIVE_CONTEXT_NAMESPACE_ROOT_0,
+        )
+        .await?;
 
         let actor = Self {
             blobs,
+            docs,
 
             default_author: Arc::new(default_author),
-            node_root_doc: Arc::new(TokioMutex::new(node_root_doc)),
+            node_doc_root: Arc::new(TokioMutex::new(node_doc_root)),
         };
         tokio::task::spawn(actor.run(rx));
 
@@ -111,7 +138,7 @@ impl EnrollmentServiceActor {
                 tracing::debug!("received subscribe request from: {}", inner.node_id);
 
                 let handle_fn = async || -> anyhow::Result<SubscribeResponse> {
-                    let doc = self.node_root_doc.lock().await;
+                    let doc = self.node_doc_root.lock().await;
 
                     let mut enrollment_service_subscribers: EnrolledServiceSubscribersT = match doc
                         .get_exact(
@@ -134,8 +161,10 @@ impl EnrollmentServiceActor {
                         .entry(inner.node_id)
                         .or_default();
 
-                    current_subscriber.info = inner.agent_info.discriminant();
                     current_subscriber.last_subscription_confirmed = chrono::Local::now().to_utc();
+                    current_subscriber.facts_latest_doc_ticket_json =
+                        serde_json::to_string(&inner.facts_doc_ticket)
+                            .context("serializing the doc ticket to JSON")?;
 
                     tracing::debug!("got subscriber {}: {current_subscriber:?}", inner.node_id);
 
@@ -146,7 +175,11 @@ impl EnrollmentServiceActor {
                     )
                     .await?;
 
-                    // TODO: persist facts
+                    // import the node's fact document which starts syncing in the background
+                    self.docs
+                        .import(*inner.facts_doc_ticket)
+                        .await
+                        .context("importing facts doc ticket")?;
 
                     Ok(SubscribeResponse {})
                 };
@@ -164,7 +197,7 @@ impl EnrollmentServiceActor {
             }
             ListSubscribers(irpc::WithChannels { inner: _, tx, .. }) => {
                 let handle_fn = async || -> anyhow::Result<_> {
-                    let doc = self.node_root_doc.lock().await;
+                    let doc = self.node_doc_root.lock().await;
 
                     let enrollment_service_subscribers: EnrolledServiceSubscribersT = match doc
                         .get_exact(
@@ -184,6 +217,69 @@ impl EnrollmentServiceActor {
                     };
 
                     Ok(enrollment_service_subscribers)
+                };
+
+                if let Err(e) = tx
+                    .send(handle_fn().await.map_err(|e| {
+                        tracing::error!("error while processing request: {e}");
+
+                        e.to_string()
+                    }))
+                    .await
+                {
+                    tracing::error!("error sending response: {e}");
+                };
+            }
+            GetSubcriberFacts(WithChannels { inner, tx, .. }) => {
+                let handle_fn = async || -> anyhow::Result<_> {
+                    let root_doc = self.node_doc_root.lock().await;
+
+                    let enrollment_service_subscribers: EnrolledServiceSubscribersT = match root_doc
+                        .get_exact(
+                            self.default_author.id(),
+                            Self::DOC_KEY_ENROLLMENT_SERVICE_SUBSCRIBERS,
+                            true,
+                        )
+                        .await
+                        .context("error getting {Self::CONNECTED_COORDINATORS}: {e}")?
+                    {
+                        Some(entry) => {
+                            let value = self.blobs.get_bytes(entry.content_hash()).await?;
+
+                            serde_json::from_slice(&value)?
+                        }
+                        None => Default::default(),
+                    };
+
+                    let subscriber = enrollment_service_subscribers
+                        .get(&inner.node_id)
+                        .ok_or_else(|| anyhow::anyhow!("given node is not a subscriber"))?;
+
+                    // TODO: open the subscribers fact doc
+                    let facts_doc_id = subscriber.facts_latest_doc_ticket().await?.capability.id();
+                    let facts_doc = self.docs.open(facts_doc_id).await?.ok_or_else(|| {
+                        anyhow::anyhow!("cannot find the facts doc with id {facts_doc_id}")
+                    })?;
+
+                    let facts_latest_entry = facts_doc
+                        .get_one(QueryBuilder::<SingleLatestPerKeyQuery>::default().key_exact(DOC_KEY_FACTS_LATEST).build())
+                        .await
+                        .context("query for {DOC_KEY} failed")?
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "cannot find entry {DOC_KEY_FACTS_LATEST} for in doc {facts_doc_id}")
+                        })?;
+
+                    let facts_latest_bytes = self
+                        .blobs
+                        .get_bytes(facts_latest_entry.content_hash())
+                        .await
+                        .context("no blobs found for {facts_latest_entry}")?;
+
+                    let facts_latest = serde_json::from_slice(&facts_latest_bytes)
+                        .context("deserializing as facts")?;
+
+                    Ok(facts_latest)
                 };
 
                 if let Err(e) = tx
@@ -267,22 +363,21 @@ impl EnrollmentServiceClient {
         Ok(duration)
     }
 
-    pub async fn subscribe(&self, timeout: std::time::Duration) -> anyhow::Result<()> {
+    pub async fn subscribe(
+        &self,
+        timeout: std::time::Duration,
+        facts_doc_ticket: DocTicket,
+    ) -> anyhow::Result<SubscribeResponse> {
         let request = Subscribe {
             node_id: self.node_id,
-            // TODO: figure out the agent info type instead of hardcoding NixOS here
-            agent_info: AgentInfo::NixOS {
-                facts: Box::new(Facts::try_from_environment().await?),
-            },
+            facts_doc_ticket: Box::new(facts_doc_ticket),
         };
 
         let response = tokio::time::timeout(timeout, self.client.rpc(request))
             .await??
             .map_err(anyhow::Error::msg)?;
 
-        tracing::debug!("got response: {response:?}");
-
-        Ok(())
+        Ok(response)
     }
 
     pub async fn list_subscribers(
@@ -295,7 +390,19 @@ impl EnrollmentServiceClient {
             .await??
             .map_err(anyhow::Error::msg)?;
 
-        tracing::debug!("got response: {response:?}");
+        Ok(response)
+    }
+
+    pub async fn get_subscriber_facts(
+        &self,
+        timeout: std::time::Duration,
+        node_id: PublicKey,
+    ) -> anyhow::Result<Facts> {
+        let request = GetSubcriberFacts { node_id };
+
+        let response = tokio::time::timeout(timeout, self.client.rpc(request))
+            .await??
+            .map_err(anyhow::Error::msg)?;
 
         Ok(response)
     }

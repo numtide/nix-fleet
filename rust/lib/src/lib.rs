@@ -299,7 +299,7 @@ pub mod facts {
     use better_commands::CmdOutput;
     use serde::{Deserialize, Serialize};
 
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize, PartialEq)]
     pub struct Facts {
         pub os: platforms::OS,
         pub os_info: os_info::Info,
@@ -398,6 +398,9 @@ pub mod admin {
             /// Loop interval for the loop that ensures the subscription to the enrollment service remain intact.
             #[arg(long)]
             pub maybe_subscribe_loop_interval_seconds: Option<f64>,
+
+            #[arg(long)]
+            pub maybe_update_facts_loop_interval_seconds: Option<f64>,
         }
 
         /// Definition for the top-level Admin command
@@ -443,19 +446,24 @@ pub mod admin {
         /// All enrollment service subcommands
         #[derive(Debug, Clone, Subcommand)]
         pub enum EnrollmentServiceCmd {
-            Ping {},
+            Ping,
 
             /// Retrieve a list of agents
             ListAgents,
+
+            /// Retrieve facts for an agent
+            GetFacts {
+                node_id: PublicKey,
+            },
         }
 
         /// All enrollment agent subcommands
         #[derive(Debug, Clone, Subcommand)]
         pub enum EnrollmentAgentCmd {
-            Ping {},
+            Ping,
 
             /// Get facts from an agent directly.
-            GetFacts {},
+            GetFacts,
         }
     }
 
@@ -501,12 +509,12 @@ pub mod admin {
                     .await?;
 
                 match cmd {
-                    cli::EnrollmentAgentCmd::Ping {} => {
+                    cli::EnrollmentAgentCmd::Ping => {
                         let duration = client.ping().await?;
 
                         serde_json::to_value(format!("ping to {node_id} took {duration:?}"))?
                     }
-                    cli::EnrollmentAgentCmd::GetFacts {} => {
+                    cli::EnrollmentAgentCmd::GetFacts => {
                         let result = client.get_facts().await?;
 
                         serde_json::to_value(result)?
@@ -519,13 +527,18 @@ pub mod admin {
                         ).await?;
 
                 match cmd {
-                    cli::EnrollmentServiceCmd::Ping {} => {
+                    cli::EnrollmentServiceCmd::Ping => {
                         let duration = client.ping(timeout).await?;
 
                         serde_json::to_value(duration)?
                     }
                     cli::EnrollmentServiceCmd::ListAgents => {
                         let response = client.list_subscribers(timeout).await?;
+
+                        serde_json::to_value(response)?
+                    }
+                    cli::EnrollmentServiceCmd::GetFacts { node_id } => {
+                        let response = client.get_subscriber_facts(timeout, node_id).await?;
 
                         serde_json::to_value(response)?
                     }

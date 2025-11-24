@@ -15,8 +15,13 @@ use tokio::sync::Mutex as TokioMutex;
 
 use crate::admin::cli::AgentArgs;
 use crate::facts::Facts;
-use crate::protocols::enrollment::enrollment_service::EnrollmentServiceClient;
-use crate::protocols::enrollment::ensure_node_root_doc;
+use crate::protocols::enrollment::enrollment_service::{
+    EnrollmentServiceClient, SubscribeResponse,
+};
+use crate::protocols::enrollment::{
+    ensure_node_doc_with_derived_keys, DOC_KEY_DERIVE_CONTEXT_NAMESPACE_FACTS_0,
+    DOC_KEY_DERIVE_CONTEXT_NAMESPACE_ROOT_0, DOC_KEY_FACTS_LATEST,
+};
 
 pub const ALPN: &[u8] = b"nix-fleet/enrollment/agent/0";
 
@@ -39,26 +44,36 @@ pub struct EnrollmentServiceSubscription {
     failed_connections: Vec<(DateTime<Utc>, String)>,
 }
 
+/// Actor for the enrollment agent.
+///
+/// The assumption behind the docs is that each node creates it with the same
+/// secret that's used for communications, tying this document to its node
+/// identity.
 #[derive(Clone)]
 struct EnrollmentAgentActor {
     endpoint: Endpoint,
     blobs: BlobsProtocol,
     default_author: Arc<Author>,
 
-    /// The assumption behind this is that each node creates it with the same
-    /// secret that's used for communications, tying this document to its node
-    /// identity.
-    node_root_doc: Arc<TokioMutex<Doc>>,
+    /// Local-only root node document for persistence of settings and state.
+    node_doc_root: Arc<TokioMutex<Doc>>,
 
-    /// Coordinators that are desired to be connected to.
+    /// Document for sharing facts. A ticket for this is shared with the enrollment service.
+    node_doc_facts: Arc<TokioMutex<Doc>>,
+    facts_update_interval: std::time::Duration,
+
+    /// Enrollment services which are desired to be connected to.
     enrollment_services_desired: LinkedHashSet<PublicKey>,
     enrollment_service_subscription_reconcile_interval: std::time::Duration,
 }
 
 impl EnrollmentAgentActor {
-    const DOC_KEY_ENROLLMENT_SERVICE_SUBSCRIPTIONS: &str = "SUBSCRIBED_ENROLLMENT_SERVICES";
-    const DEFAULT_ENROLLMENT_SERVICE_SUBSCRIPTION_RECONCILE_INTERVAL: f64 = 10.0;
     const DEFAULT_REQUEST_TIMEOUT_SECONDS: f64 = 6.0;
+
+    const DEFAULT_ENROLLMENT_SERVICE_SUBSCRIPTION_RECONCILE_INTERVAL: f64 = 10.0;
+    const DOC_KEY_ENROLLMENT_SERVICE_SUBSCRIPTIONS: &str = "enrollment-actor/subscribed-services";
+
+    const DEFAULT_FACTS_UPDATE_INTERVAL: f64 = 60.0;
 
     async fn spawn(
         secret_key: SecretKey,
@@ -70,6 +85,7 @@ impl EnrollmentAgentActor {
         let AgentArgs {
             maybe_coordinator,
             maybe_subscribe_loop_interval_seconds,
+            maybe_update_facts_loop_interval_seconds,
         } = agent_args;
 
         let mut enrollment_service_pubkeys: LinkedHashSet<PublicKey> = Default::default();
@@ -79,20 +95,36 @@ impl EnrollmentAgentActor {
 
         let (tx, rx) = tokio::sync::mpsc::channel(1);
 
-        let (default_author, node_root_doc) =
-            ensure_node_root_doc(&docs, &secret_key.to_bytes()).await?;
+        let (default_author, node_doc_root) = ensure_node_doc_with_derived_keys(
+            &docs,
+            &secret_key.to_bytes(),
+            DOC_KEY_DERIVE_CONTEXT_NAMESPACE_ROOT_0,
+        )
+        .await?;
+
+        let (_, node_doc_facts) = ensure_node_doc_with_derived_keys(
+            &docs,
+            &secret_key.to_bytes(),
+            DOC_KEY_DERIVE_CONTEXT_NAMESPACE_FACTS_0,
+        )
+        .await?;
 
         let actor = Self {
             endpoint,
             blobs,
 
             default_author: Arc::new(default_author),
-            node_root_doc: Arc::new(TokioMutex::new(node_root_doc)),
+            node_doc_root: Arc::new(TokioMutex::new(node_doc_root)),
+            node_doc_facts: Arc::new(TokioMutex::new(node_doc_facts)),
 
             enrollment_services_desired: enrollment_service_pubkeys,
             enrollment_service_subscription_reconcile_interval: std::time::Duration::from_secs_f64(
                 maybe_subscribe_loop_interval_seconds
                     .unwrap_or(Self::DEFAULT_ENROLLMENT_SERVICE_SUBSCRIPTION_RECONCILE_INTERVAL),
+            ),
+            facts_update_interval: std::time::Duration::from_secs_f64(
+                maybe_update_facts_loop_interval_seconds
+                    .unwrap_or(Self::DEFAULT_FACTS_UPDATE_INTERVAL),
             ),
         };
         tokio::task::spawn(actor.run(rx));
@@ -100,8 +132,26 @@ impl EnrollmentAgentActor {
         Ok(Client::local(tx))
     }
 
+    async fn facts_update_task_loop(self) -> Result<(), anyhow::Error> {
+        let facts = Facts::try_from_environment().await?;
+        let facts_serialized = serde_json::to_vec(&facts).context("serializing facts")?;
+
+        self.node_doc_facts
+            .lock()
+            .await
+            .set_bytes(
+                self.default_author.id(),
+                DOC_KEY_FACTS_LATEST,
+                facts_serialized,
+            )
+            .await
+            .context("setting bytes for latest facts doc {DOC_KEY_FACTS_LATEST}")?;
+
+        Ok(())
+    }
+
     async fn coordinator_connection_task_loop(self) -> Result<(), anyhow::Error> {
-        let doc = self.node_root_doc.lock().await;
+        let doc = self.node_doc_root.lock().await;
 
         let mut enrollment_service_subscriptions: BTreeMap<
             PublicKey,
@@ -151,12 +201,21 @@ impl EnrollmentAgentActor {
             };
 
             match enrollment_service_client
-                .subscribe(std::time::Duration::from_secs_f64(
-                    Self::DEFAULT_REQUEST_TIMEOUT_SECONDS,
-                ))
+                .subscribe(
+                    std::time::Duration::from_secs_f64(Self::DEFAULT_REQUEST_TIMEOUT_SECONDS),
+                    self.node_doc_facts
+                        .lock()
+                        .await
+                        .share(
+                            iroh_docs::api::protocol::ShareMode::Read,
+                            iroh_docs::api::protocol::AddrInfoOptions::Id,
+                        )
+                        .await
+                        .context("creating share link for doc facts")?,
+                )
                 .await
             {
-                Ok(()) => {
+                Ok(SubscribeResponse {}) => {
                     let now = chrono::Local::now().to_utc();
                     tracing::debug!("successfully confirmed subscription to {pubkey} on {now}");
 
@@ -187,6 +246,24 @@ impl EnrollmentAgentActor {
     }
 
     async fn run(mut self, mut rx: tokio::sync::mpsc::Receiver<EnrollmentAgentRequestMessage>) {
+        let facts_task = {
+            let self_1 = self.clone();
+
+            tokio::task::spawn(async move {
+                loop {
+                    tracing::debug!("starting loop iteration to update facts");
+
+                    if let Err(e) = self_1.clone().facts_update_task_loop().await {
+                        tracing::error!("error in facts update task loop: {e}");
+                    } else {
+                        tracing::debug!("completed loop iteration to update facts");
+                    }
+
+                    tokio::time::sleep(self_1.facts_update_interval).await;
+                }
+            })
+        };
+
         let enrollment_subscription_task = {
             let self_1 = self.clone();
 
@@ -212,6 +289,7 @@ impl EnrollmentAgentActor {
         }
 
         enrollment_subscription_task.abort();
+        facts_task.abort();
     }
 
     async fn handle_message(&mut self, msg: EnrollmentAgentRequestMessage) {
