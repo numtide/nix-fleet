@@ -36,6 +36,7 @@ fn echo_completes_bench(c: &mut Criterion) {
                         2,
                         flt_lib::protocols::echo_hash::rpc::EchoHashRpcApi::MAX_CHUNK_SIZE + 1,
                         10.0,
+                        true,
                     )
                     .await,
                 );

@@ -60,12 +60,15 @@ pub mod util {
         },
     }
 
+    pub fn generate_secret_key() -> SecretKey {
+        SecretKey::generate(&mut rand::rng())
+    }
+
     pub async fn get_endpoint(
-        maybe_secret_key: Option<SecretKey>,
+        secret_key: SecretKey,
         relay_mode: Option<iroh::RelayMode>,
         discoveries: Discoveries,
-    ) -> anyhow::Result<(SecretKey, iroh::Endpoint)> {
-        let secret_key = maybe_secret_key.unwrap_or_else(|| SecretKey::generate(&mut rand::rng()));
+    ) -> anyhow::Result<iroh::Endpoint> {
         let public_key = secret_key.public();
 
         let mut builder = iroh::Endpoint::builder().secret_key(secret_key.clone());
@@ -89,6 +92,7 @@ pub mod util {
             builder = builder.relay_mode(iroh::RelayMode::Disabled);
         }
 
+        builder = builder.clear_discovery();
         match discoveries {
             Discoveries::Custom { secret_key, url } => {
                 let pkarr_url = url.join("/pkarr")?;
@@ -134,7 +138,7 @@ pub mod util {
             }
         }
 
-        Ok((secret_key, endpoint))
+        Ok(endpoint)
     }
 
     pub fn parse_relay_mode(input: &str) -> anyhow::Result<RelayMode> {
@@ -201,7 +205,7 @@ pub mod coordinator {
         let (protect_callback_handler, protect_callback) = ProtectCallbackHandler::new();
         let blob_store = {
             let gc_config = Some(iroh_blobs::store::GcConfig {
-                interval: std::time::Duration::from_millis(100),
+                interval: std::time::Duration::from_mins(10),
                 add_protected: Some(protect_callback),
             });
 
@@ -277,6 +281,8 @@ pub mod coordinator {
             _ = async move {
                 if let Some(mut rx) = maybe_shutdown_rx {
                     rx.recv().await;
+                } else {
+                    std::future::pending::<()>().await;
                 }
             } => {
                 tracing::info!("received shutdown message");
@@ -291,7 +297,7 @@ pub mod coordinator {
         let _ = router.shutdown().await;
         tracing::info!("shutdown complete, bye!");
 
-        Ok(Default::default())
+        Ok(().into())
     }
 }
 
@@ -321,7 +327,7 @@ pub mod agent {
         let blob_store =
             iroh_blobs::store::mem::MemStore::new_with_opts(iroh_blobs::store::mem::Options {
                 gc_config: Some(iroh_blobs::store::GcConfig {
-                    interval: std::time::Duration::from_millis(100),
+                    interval: std::time::Duration::from_mins(10),
                     add_protected: Some(protect_callback),
                 }),
             });
@@ -359,6 +365,8 @@ pub mod agent {
             _ = async move {
                 if let Some(mut rx) = maybe_shutdown_rx {
                     rx.recv().await;
+                } else {
+                    std::future::pending::<()>().await;
                 }
             } => {
                 tracing::info!("received shutdown message");
@@ -473,7 +481,7 @@ pub mod admin {
         use iroh::PublicKey;
 
         /// Definition for the top-level Admin command
-        #[derive(Debug, Clone, Default, strum::EnumString)]
+        #[derive(Debug, Clone, Default, strum::EnumString, strum::Display)]
         pub enum PersistenceMode {
             #[default]
             Memory,
@@ -485,6 +493,7 @@ pub mod admin {
         #[command(version, about)]
         pub struct CoordinatorArgs {
             /// Persistence for the local document storage.
+            #[arg(long, default_value_t = PersistenceMode::default())]
             pub persistence_mode: PersistenceMode,
         }
 

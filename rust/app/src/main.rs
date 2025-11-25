@@ -10,7 +10,7 @@ use tracing_subscriber::{
 use flt_lib::{
     admin::cli::{AdminArgs, AgentArgs, CoordinatorArgs},
     iroh::RelayMode,
-    util::{get_endpoint, parse_openssh_ed25519_private},
+    util::{generate_secret_key, get_endpoint, parse_openssh_ed25519_private},
 };
 
 #[derive(Debug, Parser)]
@@ -51,18 +51,18 @@ async fn main() -> anyhow::Result<()> {
 
     let args = App::parse();
 
-    let maybe_secret_key = match args.maybe_secret_key {
-        None => None,
-        Some(path) => Some(
+    let secret_key = match args.maybe_secret_key {
+        None => generate_secret_key(),
+        Some(path) => {
             tokio::task::spawn_blocking(move || {
                 parse_openssh_ed25519_private(std::fs::File::open(&path)?)
             })
-            .await??,
-        ),
+            .await??
+        }
     };
 
-    let (secret_key, endpoint) = get_endpoint(
-        maybe_secret_key,
+    let endpoint = get_endpoint(
+        secret_key.clone(),
         Some(args.relay_mode),
         flt_lib::util::Discoveries::default(),
     )

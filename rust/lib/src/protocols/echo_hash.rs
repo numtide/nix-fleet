@@ -892,7 +892,7 @@ pub mod tests {
             cli::{AdminArgs, AdminCmd, CoordinatorArgs},
         },
         protocols::echo_hash::{EchoHashArgs, SendMode},
-        test_utils::{ComponentAssets, RelayedTestContext},
+        test_utils::{ComponentCallbackArgs, RelayedTestContext},
     };
 
     pub async fn run_echo_hash_with_context(
@@ -901,70 +901,98 @@ pub mod tests {
         number: usize,
         size: usize,
         timeout: f64,
+        direct: bool,
     ) {
-        let coordinator_assets = ctx
-            .spawn_component(
-                |ComponentAssets { key, endpoint, .. }, shutdown_rx| {
-                    Box::pin(async move {
-                        crate::coordinator::run(
-                            key,
-                            endpoint,
-                            CoordinatorArgs::default(),
-                            Some(shutdown_rx),
-                        )
-                        .await?;
-
-                        Ok(())
-                    })
-                },
-                None,
-            )
-            .await
-            .unwrap();
-
+        let coordinator_assets = ctx.generate_assets().unwrap();
         ctx.spawn_component(
-            move |ComponentAssets { endpoint, .. }, _| {
+            |ComponentCallbackArgs {
+                 secret_key,
+                 shutdown_rx,
+                 endpoint,
+             }| {
                 Box::pin(async move {
-                    admin::run(
+                    crate::coordinator::run(
+                        secret_key,
                         endpoint,
-                        AdminArgs {
-                            node_id: coordinator_assets.pubkey,
-                            cmd: AdminCmd::EchoHash {
-                                args: EchoHashArgs {
-                                    number,
-                                    msg: "hello".to_string(),
-                                    size,
-                                    timeout,
-                                    mode,
-                                    node_id: coordinator_assets.pubkey,
-                                },
-                            },
-                            timeout,
-                        },
+                        CoordinatorArgs::default(),
+                        Some(shutdown_rx),
                     )
-                    .await
+                    .await?;
+
+                    Ok(())
                 })
             },
-            None,
+            Some(coordinator_assets.clone()),
         )
         .await
         .unwrap();
+
+        let admin_assets = ctx.generate_assets().unwrap();
+        let endpoint = ctx.get_endpoint(&admin_assets).await.unwrap();
+        /*
+         * TODO: ask upstream to figure out why this works nested within ctx.spawn_component as opposed to directly calling `admin::run`
+         * notes:
+         * using `tokio::task::spawn` around `admin::run` doesn't work either.
+         */
+
+        let admin_component_fn = move |ComponentCallbackArgs { endpoint, .. }| -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = anyhow::Result<_>> + Send>,
+        > {
+            Box::pin(async move {
+                admin::run(
+                    endpoint,
+                    AdminArgs {
+                        node_id: coordinator_assets.pubkey,
+                        cmd: AdminCmd::EchoHash {
+                            args: EchoHashArgs {
+                                number,
+                                msg: "hello".to_string(),
+                                size,
+                                timeout,
+                                mode,
+                                node_id: coordinator_assets.pubkey,
+                            },
+                        },
+                        timeout,
+                    },
+                )
+                .await
+            })
+        };
+
+        if direct {
+            let (_shutdown_tx, shutdown_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+            admin_component_fn(ComponentCallbackArgs {
+                secret_key: admin_assets.key,
+                shutdown_rx,
+                // won't be used anyway
+                endpoint,
+            })
+            .await
+            .unwrap();
+        } else {
+            ctx.spawn_component(admin_component_fn, Some(admin_assets))
+                .await
+                .unwrap();
+        }
     }
 
     #[tokio::test]
     #[test_log::test]
-    #[test_case(SendMode::Native, 10, 1024, 1.0; "Native")]
-    #[test_case(SendMode::Rpc, 10, 1024, 1.0; "Rpc")]
-    #[test_case(SendMode::RpcStream, 10, 1024, 1.0; "RpcStream")]
-    #[test_case(SendMode::Docs, 10, 1024, 1.0; "Docs")]
+    #[test_case(SendMode::Native, 10, 1024, 1.0, true; "Native")]
+    #[test_case(SendMode::Rpc, 10, 1024, 1.0, true; "Rpc")]
+    #[test_case(SendMode::RpcStream, 10, 1024, 1.0, true; "RpcStream")]
+    #[test_case(SendMode::Docs, 10, 1024, 1.0, false; "Docs nested")]
+    #[test_case(SendMode::Docs, 10, 1024, 1.0, true => ignore /* TODO: why does this fail? */; "Docs direct")]
     pub async fn echo_completes_admin_to_coordinator(
         mode: SendMode,
         number: usize,
         size: usize,
         timeout: f64,
+        direct: bool,
     ) {
         let ctx = RelayedTestContext::new().await;
 
-        run_echo_hash_with_context(&ctx, mode, number, size, timeout).await
+        run_echo_hash_with_context(&ctx, mode, number, size, timeout, direct).await
     }
 }

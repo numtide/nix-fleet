@@ -9,7 +9,7 @@ agent-nodeid:
 
 run-coordinator relay_mode="disabled" +args="":
     #!/usr/bin/env bash
-    RUST_LOG=flt=trace,flt_lib=trace \
+    RUST_LOG=iroh=debug,flt=trace,flt_lib=trace \
         cargo run -- \
             --maybe-secret-key=./fixtures/coordinator.ed25519 \
             --relay-mode={{relay_mode}} \
