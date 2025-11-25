@@ -177,7 +177,7 @@ The project will require NixOS VM tests. At this point I want to connect the CI 
 
 Outcome: Repository on a publicly reachable Forge with Packages, Nix development shell definition, Nix-native CI, Binary Cache
 
-#### ***[50 %] Milestone A***: Complete Nix development shell
+#### ***[60 %] Milestone A***: Complete Nix development shell
 
 ##### Acceptance Criteria
 
@@ -191,14 +191,27 @@ Here we can heavily rely on existing frameworks.
 Using blueprint for the repository layout because it imposes a simple and sufficient structure for Nix related files. Using the prefix and `nix` subdirectory to keep the top-level clean.
 See [flake.nix](./flake.nix) and [nix/](./nix/)
 
-Using crane for the [rust-workspace package](nix/packages/rust-workspace.nix) as it's a proven library that wraps around `nixpkgs` library functions and `cargo` itself.
-
+Using [crane](https://crane.dev/) for the [rust-workspace package](nix/packages/rust-workspace.nix) as it's a proven library that wraps around `nixpkgs` library functions and `cargo` itself.
 
 ##### Solving AC2: use crane's `devShell` and inherits its dependencies from the Rust workspace package
 
-See the [rust devShell](./nix/devshells/rust.nix).
+The [rust devShell](./nix/devshells/rust.nix) uses the Rust specific [craneLib.devShell](https://crane.dev/API.html#cranelibdevshell). 
+It inherits its build- and runtime dependencies from the previuosly described `rust-workspace` package to avoid duplication and keep it easier to maintain.
 
-#### ***[0 %] Milestone B***: Final binary structure for Agent, Coordinator, Admin from PoT code
+##### Solving AC3: TODO when the first release is published
+
+#### ***[30 %] Milestone B***: Final binary structure for Agent, Coordinator, Admin from PoT code
+
+- [x] AC1: All components can be started interactively for development purposes.
+- [ ] AC2: Final binary structure incorporating the insights from the NixOS VM tests.
+- [ ] AC3: Well documented hierarchical configuration to that incorporates CLI arguments, configuration files and environment variables
+
+##### Solving AC1: single-binary with subcommands and Justfile for convenience
+The main binary `flt` has [an `Applet` enumeration](https://github.com/numtide/nix-fleet/blob/0a768d903b2399d24df9334d0950cad540b2e844/rust/app/src/main.rs#L30-L35) for each component.
+There's a subcommand structure for each of them that allows running each component separately.
+
+The [Justfile](./Justfile) has commands to run all components that wrap `cargo run` appropriately and give some sane defaults for development.
+These recipes can be discovered using `just --list`.
 
 #### ***[100 %] Milestone C***: Workflows and developer documentation for local and CI testing for Rust and Nix.
 
@@ -206,7 +219,7 @@ See the [rust devShell](./nix/devshells/rust.nix).
 
 - [x] AC1: Choose Rust test harness and linters
 - [x] AC2: `nix flake check` runs all Rust workflows
-- [ ] AC3: document native Rust and Nix wrapped workflow execution
+- [x] AC3: document native Rust and Nix wrapped workflow execution
 
 ##### Solving AC1: cargo-nextest
 Using `cargo-nextest` to run the Rust test suite because it runs each test case in a separate process, supports flaky test heuristics, and provides test grouping/partitioning.
@@ -215,7 +228,8 @@ Using `cargo-nextest` to run the Rust test suite because it runs each test case 
 According to the blueprint convention, all Nix derivations that are exposes by a packages' `passthru.tests` attribute are automatically exposes as flake checks.
 This is implemented in the [rust-workspace package](nix/packages/rust-workspace.nix) with Nix derivations for wrapping the cargo workflows `clippy`, `deny`, `doc`, and `nextest`,
 
-##### Solving AC3: Keeping it simple, putting the info in the [README#Contributing](./README.md#contributing)
+##### Solving AC3: [README#Contributing](./README.md#contributing)
+I want to strike a balance the amount of public information that's duplicated in the docs here. Hopefully it's beginner friendly enough to keep encourage contributors or empower them to ask questions on missing information.
 
 #### ***[100 %] Milestone D***: Nix build infrastructure for x86_64-linux and aarch64-linux and signed Nix Binary cache
 
