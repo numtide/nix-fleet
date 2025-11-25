@@ -169,11 +169,10 @@ I conclude that the evidence is in support of continuing with this set up and us
 
 #### ***[0 %] Milestone I***: Traffic tunneling to NAT'ed nodes for SSH etc.
 
-#### ***[30 %] Milestone J***: Binary set up: unified CLI or separate binaries, or combination?
+#### ***[50 %] Milestone J***: Binary set up: unified CLI or separate binaries, or combination?
 
 - [x] AC1: All components can be started interactively for development purposes.
-- [ ] AC2: Final binary structure incorporating the insights from the NixOS VM tests.
-- [ ] AC3: Well documented hierarchical configuration to that incorporates CLI arguments, configuration files and environment variables
+- [ ] AC2: Semi-final binary structure incorporating the insights from the NixOS VM tests.
 
 ##### Solving AC1: single-binary with subcommands and Justfile for convenience
 The main binary `flt` has [an `Applet` enumeration](https://github.com/numtide/nix-fleet/blob/0a768d903b2399d24df9334d0950cad540b2e844/rust/app/src/main.rs#L30-L35) for each component.
@@ -182,14 +181,13 @@ There's a subcommand structure for each of them that allows running each compone
 The [Justfile](./Justfile) has commands to run all components that wrap `cargo run` appropriately and give some sane defaults for development.
 These recipes can be discovered using `just --list`.
 
-
 ### Epic 2: Repository structure, Development Environment, Package Skeletons, Local and CI Testing
 
 The project will require NixOS VM tests. At this point I want to connect the CI to a Nix-native CI (e.g. buildbot-nix, Hydra), preferably an existing instance.
 
 Outcome: Repository on a publicly reachable Forge with Packages, Nix development shell definition, Nix-native CI, Binary Cache
 
-#### ***[0 %] Milestone A***: Complete Nix development shell
+#### ***[100 %] Milestone A***: Complete Nix development shell
 
 ##### Acceptance Criteria
 
@@ -208,7 +206,9 @@ It inherits its build- and runtime dependencies from the previuosly described `r
 
 ##### Solving AC3: TODO when the first release is published
 
-#### ***[30 %] Milestone B***: Final binary structure for Agent, Coordinator, Admin from PoT code
+#### ***[0 %] Milestone B***: Final binary structure for Agent, Coordinator, Admin from PoT code
+
+- [ ] ACx: Well documented hierarchical configuration to that incorporates CLI arguments, configuration files and environment variables
 
 #### ***[100 %] Milestone C***: Workflows and developer documentation for local and CI testing for Rust and Nix.
 
