@@ -230,7 +230,7 @@ According to the blueprint convention, all Nix derivations that are exposes by a
 This is implemented in the [rust-workspace package](nix/packages/rust-workspace.nix) with Nix derivations for wrapping the cargo workflows `clippy`, `deny`, `doc`, and `nextest`,
 
 ##### Solving AC3: [README#Contributing](./README.md#contributing)
-I want to strike a balance the amount of public information that's duplicated in the docs here. Hopefully it's beginner friendly enough to keep encourage contributors or empower them to ask questions on missing information.
+I want to strike a balance with the amount of public information that's duplicated in the docs here. Hopefully it's beginner friendly enough to keep encourage contributors or empower them to ask questions on missing information.
 
 #### ***[100 %] Milestone D***: Nix build infrastructure for x86_64-linux and aarch64-linux and signed Nix Binary cache
 
