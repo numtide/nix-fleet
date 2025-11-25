@@ -60,12 +60,15 @@ pub mod util {
         },
     }
 
+    pub fn generate_secret_key() -> SecretKey {
+        SecretKey::generate(&mut rand::rng())
+    }
+
     pub async fn get_endpoint(
-        maybe_secret_key: Option<SecretKey>,
+        secret_key: SecretKey,
         relay_mode: Option<iroh::RelayMode>,
         discoveries: Discoveries,
-    ) -> anyhow::Result<(SecretKey, iroh::Endpoint)> {
-        let secret_key = maybe_secret_key.unwrap_or_else(|| SecretKey::generate(&mut rand::rng()));
+    ) -> anyhow::Result<iroh::Endpoint> {
         let public_key = secret_key.public();
 
         let mut builder = iroh::Endpoint::builder().secret_key(secret_key.clone());
@@ -89,6 +92,7 @@ pub mod util {
             builder = builder.relay_mode(iroh::RelayMode::Disabled);
         }
 
+        builder = builder.clear_discovery();
         match discoveries {
             Discoveries::Custom { secret_key, url } => {
                 let pkarr_url = url.join("/pkarr")?;
@@ -114,8 +118,11 @@ pub mod util {
                 };
 
                 if cfg!(not(test)) {
-                    builder =
-                        builder.discovery(iroh::discovery::dns::DnsDiscovery::n0_dns().build());
+                    builder = builder
+                        .discovery(
+                            iroh::discovery::pkarr::PkarrPublisher::n0_dns().build(secret_key),
+                        )
+                        .discovery(iroh::discovery::pkarr::PkarrResolver::n0_dns().build());
                 }
             }
             Discoveries::None => {}
@@ -130,10 +137,11 @@ pub mod util {
                 tokio::time::timeout(tokio::time::Duration::from_secs_f64(5.0), endpoint.online())
                     .await
                     .context(format!("waiting for home relay: {relay_mode:?}"))?;
+                tracing::debug!("network is online!");
             }
         }
 
-        Ok((secret_key, endpoint))
+        Ok(endpoint)
     }
 
     pub fn parse_relay_mode(input: &str) -> anyhow::Result<RelayMode> {
@@ -167,14 +175,21 @@ pub mod common {}
 /// This module implements the Coordinator functionality.
 /// It's expected to run on machines with high uptime, bandwidth, and reliability; aka servers.
 pub mod coordinator {
-    use iroh::{protocol::Router, SecretKey};
+    use anyhow::Context;
+    use iroh::{
+        protocol::{DynProtocolHandler, Router},
+        SecretKey,
+    };
     use iroh_docs::engine::ProtectCallbackHandler;
+    use tokio::sync::mpsc::UnboundedReceiver;
     use tracing::info;
 
-    use crate::protocols::{
-        echo_hash::{docs::EchoHashDocsApi, native::EchoHashNative, rpc::EchoHashRpcApi},
-        enrollment::enrollment_service::{self, EnrollmentServiceApi},
-        node_admin::NodeAdmin,
+    use crate::{
+        admin::cli::{CoordinatorArgs, PersistenceMode},
+        protocols::{
+            echo_hash::{docs::EchoHashDocsApi, native::EchoHashNative, rpc::EchoHashRpcApi},
+            enrollment::enrollment_service::{self, EnrollmentServiceApi},
+        },
     };
 
     /// Run the Coordinator.
@@ -182,6 +197,8 @@ pub mod coordinator {
     pub async fn run(
         secret_key: SecretKey,
         endpoint: iroh::Endpoint,
+        coordinator_args: CoordinatorArgs,
+        maybe_shutdown_rx: Option<UnboundedReceiver<()>>,
     ) -> anyhow::Result<serde_json::Value> {
         let node_id = endpoint.id();
         let bind_info = endpoint.bound_sockets();
@@ -189,58 +206,111 @@ pub mod coordinator {
 
         // Enable iroh-docs and its dependencies
         let (protect_callback_handler, protect_callback) = ProtectCallbackHandler::new();
-        let blob_store =
-            iroh_blobs::store::mem::MemStore::new_with_opts(iroh_blobs::store::mem::Options {
-                gc_config: Some(iroh_blobs::store::GcConfig {
-                    interval: std::time::Duration::from_millis(100),
-                    add_protected: Some(protect_callback),
-                }),
+        let blob_store = {
+            let gc_config = Some(iroh_blobs::store::GcConfig {
+                interval: std::time::Duration::from_mins(10),
+                add_protected: Some(protect_callback),
             });
+
+            match &coordinator_args.persistence_mode() {
+                PersistenceMode::Memory => {
+                    let memstore = iroh_blobs::store::mem::MemStore::new_with_opts(
+                        iroh_blobs::store::mem::Options { gc_config },
+                    );
+
+                    iroh_blobs::api::Store::from(memstore)
+                }
+                PersistenceMode::Filesystem(path_buf) => {
+                    let path_buf = path_buf.join("blob_store");
+                    std::fs::DirBuilder::new()
+                        .recursive(true)
+                        .create(&path_buf)?;
+                    let fsstore = iroh_blobs::store::fs::FsStore::load_with_opts(
+                        path_buf.join("blob_fsstore.db"),
+                        iroh_blobs::store::fs::options::Options {
+                            path: iroh_blobs::store::fs::options::PathOptions::new(&path_buf),
+                            gc: gc_config,
+                            inline: Default::default(),
+                            batch: Default::default(),
+                        },
+                    )
+                    .await
+                    .context(format!("creating FsStore at {path_buf:?}"))?;
+
+                    iroh_blobs::api::Store::from(fsstore)
+                }
+            }
+        };
         let blobs = iroh_blobs::BlobsProtocol::new(&blob_store, None);
         let gossip = iroh_gossip::Gossip::builder().spawn(endpoint.clone());
-        let docs = iroh_docs::protocol::Docs::memory()
-            .protect_handler(protect_callback_handler)
-            .spawn(endpoint.clone(), (*blob_store).clone(), gossip.clone())
-            .await?;
+        let docs = match &coordinator_args.persistence_mode() {
+            PersistenceMode::Memory => iroh_docs::protocol::Docs::memory(),
+            PersistenceMode::Filesystem(path_buf) => {
+                let path_buf = path_buf.join("docs_store");
+                std::fs::DirBuilder::new()
+                    .recursive(true)
+                    .create(&path_buf)?;
+
+                iroh_docs::protocol::Docs::persistent(path_buf.clone())
+            }
+        }
+        .protect_handler(protect_callback_handler)
+        .spawn(endpoint.clone(), blob_store.clone(), gossip.clone())
+        .await?;
+        tracing::debug!("spawned iroh-docs and dependencies.");
 
         let router_builder = Router::builder(endpoint.clone())
             .accept(EchoHashNative::ALPN, EchoHashNative)
             .accept(EchoHashRpcApi::ALPN, EchoHashRpcApi::spawn().expose()?)
-            .accept(NodeAdmin::ALPN, NodeAdmin)
-            .accept(
-                enrollment_service::ALPN,
-                EnrollmentServiceApi::spawn(secret_key.clone(), blobs.clone(), docs.clone())
-                    .await?
-                    .expose()?,
-            );
-
-        let router_builder = router_builder
-            .accept(iroh_blobs::ALPN, blobs.clone())
-            .accept(iroh_gossip::ALPN, gossip)
-            .accept(iroh_docs::ALPN, docs.clone())
             .accept(
                 EchoHashDocsApi::ALPN,
                 EchoHashDocsApi::spawn(endpoint.clone(), blobs.clone(), docs.clone()).expose()?,
             )
             .accept(
                 enrollment_service::ALPN,
-                EnrollmentServiceApi::spawn(secret_key, blobs, docs)
+                EnrollmentServiceApi::spawn(secret_key.clone(), blobs.clone(), docs.clone())
                     .await?
                     .expose()?,
             );
+        tracing::debug!("spawned EnrollmentServiceApi");
 
         let router = router_builder.spawn();
 
-        tokio::signal::ctrl_c().await?;
-        router.shutdown().await?;
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                tracing::info!("received CTRL+C signal.");
+            }
 
-        Ok(serde_json::to_value(())?)
+            _ = async move {
+                if let Some(mut rx) = maybe_shutdown_rx {
+                    rx.recv().await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {
+                tracing::info!("received shutdown message");
+            }
+        }
+
+        tracing::info!("initiating shutdown...");
+        let _ = docs.shutdown().await;
+        let _ = gossip.shutdown().await;
+        let _ = blobs.shutdown().await;
+        let _ = blob_store.shutdown().await;
+        let _ = router.shutdown().await;
+        tracing::info!("shutdown complete, bye!");
+
+        Ok(().into())
     }
 }
 
 pub mod agent {
-    use iroh::{protocol::Router, SecretKey};
+    use iroh::{
+        protocol::{DynProtocolHandler, Router},
+        SecretKey,
+    };
     use iroh_docs::engine::ProtectCallbackHandler;
+    use tokio::sync::mpsc::UnboundedReceiver;
     use tracing::info;
 
     use crate::{admin::cli::AgentArgs, protocols::enrollment::enrollment_agent};
@@ -249,6 +319,7 @@ pub mod agent {
         secret_key: SecretKey,
         endpoint: iroh::Endpoint,
         agent_args: AgentArgs,
+        maybe_shutdown_rx: Option<UnboundedReceiver<()>>,
     ) -> anyhow::Result<serde_json::Value> {
         let node_id = endpoint.id();
         let bind_info = endpoint.bound_sockets();
@@ -259,7 +330,7 @@ pub mod agent {
         let blob_store =
             iroh_blobs::store::mem::MemStore::new_with_opts(iroh_blobs::store::mem::Options {
                 gc_config: Some(iroh_blobs::store::GcConfig {
-                    interval: std::time::Duration::from_millis(100),
+                    interval: std::time::Duration::from_mins(10),
                     add_protected: Some(protect_callback),
                 }),
             });
@@ -272,12 +343,16 @@ pub mod agent {
 
         let router_builder = Router::builder(endpoint.clone())
             .accept(iroh_blobs::ALPN, blobs.clone())
-            .accept(iroh_gossip::ALPN, gossip)
+            .accept(iroh_gossip::ALPN, gossip.clone())
             .accept(iroh_docs::ALPN, docs.clone())
             .accept(
                 enrollment_agent::ALPN,
                 enrollment_agent::EnrollmentAgentApi::spawn(
-                    secret_key, endpoint, blobs, docs, agent_args,
+                    secret_key,
+                    endpoint,
+                    blobs.clone(),
+                    docs.clone(),
+                    agent_args,
                 )
                 .await?
                 .expose()?,
@@ -285,10 +360,31 @@ pub mod agent {
 
         let router = router_builder.spawn();
 
-        tokio::signal::ctrl_c().await?;
-        router.shutdown().await?;
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                tracing::info!("received CTRL+C signal.");
+            }
 
-        Ok(serde_json::to_value(())?)
+            _ = async move {
+                if let Some(mut rx) = maybe_shutdown_rx {
+                    rx.recv().await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {
+                tracing::info!("received shutdown message");
+            }
+        }
+
+        tracing::info!("initiating shutdown...");
+        let _ = docs.shutdown().await;
+        let _ = gossip.shutdown().await;
+        let _ = blobs.shutdown().await;
+        let _ = blob_store.shutdown().await;
+        let _ = router.shutdown().await;
+        tracing::info!("shutdown complete, bye!");
+
+        Ok(Default::default())
     }
 }
 
@@ -384,8 +480,47 @@ pub mod admin {
     use crate::admin::cli::AdminArgs;
 
     pub mod cli {
+        use std::path::PathBuf;
+
         use clap::{Args, Subcommand};
         use iroh::PublicKey;
+
+        /// Definition for the top-level Admin command
+        #[derive(Debug, Clone, Default, strum::EnumDiscriminants)]
+        #[strum_discriminants(strum(serialize_all = "lowercase"))]
+        #[strum_discriminants(derive(Default, strum::Display, strum::EnumString))]
+        pub enum PersistenceMode {
+            #[default]
+            #[strum_discriminants(default)]
+            Memory,
+            Filesystem(PathBuf),
+        }
+
+        /// Definition for the top-level Admin command
+        #[derive(Debug, Clone, Args, Default)]
+        #[command(version, about)]
+        pub struct CoordinatorArgs {
+            /// Persistence for the local document storage.
+            #[arg(long, default_value_t = PersistenceModeDiscriminants::default())]
+            pub persistence_mode: PersistenceModeDiscriminants,
+
+            #[arg(
+                long,
+                default_value = ".coordinator_files",
+                required_if_eq("persistence_mode", "filesystem")
+            )]
+            pub persistence_dir: PathBuf,
+        }
+        impl CoordinatorArgs {
+            pub(crate) fn persistence_mode(&self) -> PersistenceMode {
+                match self.persistence_mode {
+                    PersistenceModeDiscriminants::Memory => PersistenceMode::Memory,
+                    PersistenceModeDiscriminants::Filesystem => {
+                        PersistenceMode::Filesystem(self.persistence_dir.clone())
+                    }
+                }
+            }
+        }
 
         /// Definition for the top-level Agent command
         #[derive(Debug, Clone, Args, Default)]

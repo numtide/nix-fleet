@@ -8,9 +8,9 @@ use tracing_subscriber::{
 };
 
 use flt_lib::{
-    admin::cli::{AdminArgs, AgentArgs},
+    admin::cli::{AdminArgs, AgentArgs, CoordinatorArgs},
     iroh::RelayMode,
-    util::{get_endpoint, parse_openssh_ed25519_private},
+    util::{generate_secret_key, get_endpoint, parse_openssh_ed25519_private},
 };
 
 #[derive(Debug, Parser)]
@@ -29,7 +29,7 @@ struct App {
 
 #[derive(Debug, Clone, Subcommand)]
 enum Applet {
-    Coordinator,
+    Coordinator(CoordinatorArgs),
     Agent(AgentArgs),
     Admin(AdminArgs),
 }
@@ -51,27 +51,29 @@ async fn main() -> anyhow::Result<()> {
 
     let args = App::parse();
 
-    let maybe_secret_key = match args.maybe_secret_key {
-        None => None,
-        Some(path) => Some(
+    let secret_key = match args.maybe_secret_key {
+        None => generate_secret_key(),
+        Some(path) => {
             tokio::task::spawn_blocking(move || {
                 parse_openssh_ed25519_private(std::fs::File::open(&path)?)
             })
-            .await??,
-        ),
+            .await??
+        }
     };
 
-    let (secret_key, endpoint) = get_endpoint(
-        maybe_secret_key,
+    let endpoint = get_endpoint(
+        secret_key.clone(),
         Some(args.relay_mode),
         flt_lib::util::Discoveries::default(),
     )
     .await?;
 
     let result = match args.applet {
-        Applet::Coordinator => flt_lib::coordinator::run(secret_key, endpoint.clone()).await,
+        Applet::Coordinator(coordinator_args) => {
+            flt_lib::coordinator::run(secret_key, endpoint.clone(), coordinator_args, None).await
+        }
         Applet::Agent(agent_args) => {
-            flt_lib::agent::run(secret_key, endpoint.clone(), agent_args).await
+            flt_lib::agent::run(secret_key, endpoint.clone(), agent_args, None).await
         }
         Applet::Admin(admin_args) => flt_lib::admin::run(endpoint.clone(), admin_args).await,
     };

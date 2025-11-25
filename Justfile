@@ -9,11 +9,12 @@ agent-nodeid:
 
 run-coordinator relay_mode="disabled" +args="":
     #!/usr/bin/env bash
-    RUST_LOG=flt=trace,flt_lib=trace \
+    RUST_LOG=iroh=debug,flt=trace,flt_lib=trace \
         cargo run -- \
             --maybe-secret-key=./fixtures/coordinator.ed25519 \
             --relay-mode={{relay_mode}} \
         coordinator \
+            --persistence-mode=filesystem --persistence-dir=.local/coordinator \
             {{args}}
 
 run-agent relay_mode="disabled" node_id=COORDINATOR_NODE_ID +args="":
