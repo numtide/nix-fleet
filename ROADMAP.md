@@ -187,7 +187,7 @@ The project will require NixOS VM tests. At this point I want to connect the CI 
 
 Outcome: Repository on a publicly reachable Forge with Packages, Nix development shell definition, Nix-native CI, Binary Cache
 
-#### ***[100 %] Milestone A***: Complete Nix development shell
+#### ***[60 %] Milestone A***: Complete Nix development shell
 
 ##### Acceptance Criteria
 
