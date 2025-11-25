@@ -118,8 +118,11 @@ pub mod util {
                 };
 
                 if cfg!(not(test)) {
-                    builder =
-                        builder.discovery(iroh::discovery::dns::DnsDiscovery::n0_dns().build());
+                    builder = builder
+                        .discovery(
+                            iroh::discovery::pkarr::PkarrPublisher::n0_dns().build(secret_key),
+                        )
+                        .discovery(iroh::discovery::pkarr::PkarrResolver::n0_dns().build());
                 }
             }
             Discoveries::None => {}
