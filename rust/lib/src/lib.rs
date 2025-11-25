@@ -212,7 +212,7 @@ pub mod coordinator {
                 add_protected: Some(protect_callback),
             });
 
-            match &coordinator_args.persistence_mode {
+            match &coordinator_args.persistence_mode() {
                 PersistenceMode::Memory => {
                     let memstore = iroh_blobs::store::mem::MemStore::new_with_opts(
                         iroh_blobs::store::mem::Options { gc_config },
@@ -243,7 +243,7 @@ pub mod coordinator {
         };
         let blobs = iroh_blobs::BlobsProtocol::new(&blob_store, None);
         let gossip = iroh_gossip::Gossip::builder().spawn(endpoint.clone());
-        let docs = match &coordinator_args.persistence_mode {
+        let docs = match &coordinator_args.persistence_mode() {
             PersistenceMode::Memory => iroh_docs::protocol::Docs::memory(),
             PersistenceMode::Filesystem(path_buf) => {
                 let path_buf = path_buf.join("docs_store");
@@ -480,15 +480,20 @@ pub mod admin {
     use crate::admin::cli::AdminArgs;
 
     pub mod cli {
+        use std::path::PathBuf;
+
         use clap::{Args, Subcommand};
         use iroh::PublicKey;
 
         /// Definition for the top-level Admin command
-        #[derive(Debug, Clone, Default, strum::EnumString, strum::Display)]
+        #[derive(Debug, Clone, Default, strum::EnumDiscriminants)]
+        #[strum_discriminants(strum(serialize_all = "lowercase"))]
+        #[strum_discriminants(derive(Default, strum::Display, strum::EnumString))]
         pub enum PersistenceMode {
             #[default]
+            #[strum_discriminants(default)]
             Memory,
-            Filesystem(std::path::PathBuf),
+            Filesystem(PathBuf),
         }
 
         /// Definition for the top-level Admin command
@@ -496,8 +501,25 @@ pub mod admin {
         #[command(version, about)]
         pub struct CoordinatorArgs {
             /// Persistence for the local document storage.
-            #[arg(long, default_value_t = PersistenceMode::default())]
-            pub persistence_mode: PersistenceMode,
+            #[arg(long, default_value_t = PersistenceModeDiscriminants::default())]
+            pub persistence_mode: PersistenceModeDiscriminants,
+
+            #[arg(
+                long,
+                default_value = ".coordinator_files",
+                required_if_eq("persistence_mode", "filesystem")
+            )]
+            pub persistence_dir: PathBuf,
+        }
+        impl CoordinatorArgs {
+            pub(crate) fn persistence_mode(&self) -> PersistenceMode {
+                match self.persistence_mode {
+                    PersistenceModeDiscriminants::Memory => PersistenceMode::Memory,
+                    PersistenceModeDiscriminants::Filesystem => {
+                        PersistenceMode::Filesystem(self.persistence_dir.clone())
+                    }
+                }
+            }
         }
 
         /// Definition for the top-level Agent command
