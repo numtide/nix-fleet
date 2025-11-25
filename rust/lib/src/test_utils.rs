@@ -1,7 +1,10 @@
 use std::{collections::HashMap, pin::Pin, sync::Arc};
 
 use iroh::{Endpoint, PublicKey, RelayMode, SecretKey};
-use tokio::task::JoinHandle;
+use tokio::{
+    sync::mpsc::{UnboundedReceiver, UnboundedSender},
+    task::JoinHandle,
+};
 
 use crate::util::{self, get_endpoint};
 
@@ -62,6 +65,7 @@ pub type ComponentTask = Arc<
             (
                 SecretKey,
                 JoinHandle<anyhow::Result<Box<dyn erased_serde::Serialize + Send>>>,
+                UnboundedSender<()>,
             ),
         >,
     >,
@@ -107,8 +111,6 @@ impl RelayedTestContext {
 
         tracing::info!("test servers running:\nrelay: {relay_mode:?}\niroh_dns_http: {iroh_dns_http_url}\niroh_dns: {iroh_dns_url}");
 
-        // let admin_key = iroh::SecretKey::generate(&mut rand::rng());
-
         RelayedTestContext {
             relay_server,
             iroh_dns_http_server,
@@ -127,6 +129,7 @@ impl RelayedTestContext {
         S: erased_serde::Serialize + Send + 'static,
         F: FnMut(
                 ComponentAssets,
+                UnboundedReceiver<()>,
             )
                 -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<S>> + Send>>
             + Send
@@ -156,28 +159,73 @@ impl RelayedTestContext {
             }
         };
 
-        let task_handle = {
-            let assets = assets.clone();
-
-            tokio::task::spawn(async move {
-                component_fn(assets)
-                    .await
-                    .map(|s| Box::new(s) as Box<dyn erased_serde::Serialize + Send>)
-            })
-        };
-
         // Ensure the previous task is aborted before spawning a new one with the same key
-        if let Some((_, task_handle)) = self.component_tasks.lock().await.remove(&assets.pubkey) {
-            task_handle.abort();
-            if let Err(e) = task_handle.await {
-                tracing::debug!("error aborting previous task: {e}")
-            };
-        };
-
-        self.component_tasks
+        if self
+            .component_tasks
             .lock()
             .await
-            .insert(assets.pubkey, (assets.key.clone(), task_handle));
+            .contains_key(&assets.pubkey)
+        {
+            self.shutdown_component(assets.pubkey).await?;
+        }
+
+        let (task_handle, shutdown_tx) = {
+            let assets = assets.clone();
+
+            let (shutdown_tx, shutdown_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+
+            let handle = tokio::task::spawn(async move {
+                component_fn(assets, shutdown_rx)
+                    .await
+                    .map(|s| Box::new(s) as Box<dyn erased_serde::Serialize + Send>)
+            });
+
+            (handle, shutdown_tx)
+        };
+
+        self.component_tasks.lock().await.insert(
+            assets.pubkey,
+            (assets.key.clone(), task_handle, shutdown_tx),
+        );
+
+        Ok(assets)
+    }
+
+    pub async fn shutdown_component(&self, pubkey: PublicKey) -> anyhow::Result<()> {
+        let (_, handle, shutdown_tx) = self
+            .component_tasks
+            .lock()
+            .await
+            .remove(&pubkey)
+            .ok_or_else(|| anyhow::anyhow!("no task found for {pubkey}"))?;
+
+        shutdown_tx.send(())?;
+
+        let outer = handle
+            .await
+            .map(|inner| inner.map_err(|e| e.to_string()))
+            .map_err(|e| e.to_string());
+
+        match outer {
+            Ok(Ok(_)) => (),
+            Ok(Err(e)) | Err(e) => tracing::error!("{e}"),
+        }
+
+        // handle.abort();
+
+        Ok(())
+    }
+
+    pub async fn reconnect(&self, mut assets: ComponentAssets) -> anyhow::Result<ComponentAssets> {
+        (_, assets.endpoint) = get_endpoint(
+            Some(assets.key.clone()),
+            self.relay_mode.clone(),
+            util::Discoveries::Custom {
+                secret_key: Box::new(assets.key.clone()),
+                url: self.iroh_dns_http_url.clone().into(),
+            },
+        )
+        .await?;
 
         Ok(assets)
     }

@@ -8,7 +8,7 @@ use tracing_subscriber::{
 };
 
 use flt_lib::{
-    admin::cli::{AdminArgs, AgentArgs},
+    admin::cli::{AdminArgs, AgentArgs, CoordinatorArgs},
     iroh::RelayMode,
     util::{get_endpoint, parse_openssh_ed25519_private},
 };
@@ -29,7 +29,7 @@ struct App {
 
 #[derive(Debug, Clone, Subcommand)]
 enum Applet {
-    Coordinator,
+    Coordinator(CoordinatorArgs),
     Agent(AgentArgs),
     Admin(AdminArgs),
 }
@@ -69,9 +69,11 @@ async fn main() -> anyhow::Result<()> {
     .await?;
 
     let result = match args.applet {
-        Applet::Coordinator => flt_lib::coordinator::run(secret_key, endpoint.clone()).await,
+        Applet::Coordinator(coordinator_args) => {
+            flt_lib::coordinator::run(secret_key, endpoint.clone(), coordinator_args, None).await
+        }
         Applet::Agent(agent_args) => {
-            flt_lib::agent::run(secret_key, endpoint.clone(), agent_args).await
+            flt_lib::agent::run(secret_key, endpoint.clone(), agent_args, None).await
         }
         Applet::Admin(admin_args) => flt_lib::admin::run(endpoint.clone(), admin_args).await,
     };

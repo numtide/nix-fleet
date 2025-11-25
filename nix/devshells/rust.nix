@@ -32,5 +32,7 @@ craneLib.devShell {
     pkgs.gnuplot
   ];
 
-  RUST_LOG = "flt=trace,flt_lib=trace";
+  RUST_LOG = "flt=trace,flt_lib=trace"
+  # + "iroh_docs=debug,iroh_blobs=debug"
+  ;
 }

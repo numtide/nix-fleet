@@ -889,7 +889,7 @@ pub mod tests {
     use crate::{
         admin::{
             self,
-            cli::{AdminArgs, AdminCmd},
+            cli::{AdminArgs, AdminCmd, CoordinatorArgs},
         },
         protocols::echo_hash::{EchoHashArgs, SendMode},
         test_utils::{ComponentAssets, RelayedTestContext},
@@ -904,9 +904,15 @@ pub mod tests {
     ) {
         let coordinator_assets = ctx
             .spawn_component(
-                |ComponentAssets { key, endpoint, .. }| {
-                    Box::pin(async {
-                        crate::coordinator::run(key, endpoint).await?;
+                |ComponentAssets { key, endpoint, .. }, shutdown_rx| {
+                    Box::pin(async move {
+                        crate::coordinator::run(
+                            key,
+                            endpoint,
+                            CoordinatorArgs::default(),
+                            Some(shutdown_rx),
+                        )
+                        .await?;
 
                         Ok(())
                     })
@@ -917,7 +923,7 @@ pub mod tests {
             .unwrap();
 
         ctx.spawn_component(
-            move |ComponentAssets { endpoint, .. }| {
+            move |ComponentAssets { endpoint, .. }, _| {
                 Box::pin(async move {
                     admin::run(
                         endpoint,
