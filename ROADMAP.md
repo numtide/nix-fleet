@@ -191,6 +191,10 @@ Outcome: Repository on a publicly reachable Forge with Packages, Nix development
 
 ##### Acceptance Criteria
 
+- [x] AC1: The repository provides a Nix Flake that exposes a package to build the Rust workspace binaries and run Rust tests.
+- [x] AC2: The Nix Flake exposes a devShell that provides dependencies to work on all components and run tests.
+- [ ] AC3: The flake exposes a devShell all the release tooling.
+
 ##### Solving AC1: use blueprint for Nix Flake setup and crane for Nix packaging of the Rust workspace
 Here we can heavily rely on existing frameworks.
 
