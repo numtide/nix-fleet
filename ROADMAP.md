@@ -236,18 +236,21 @@ I want to strike a balance with the amount of public information that's duplicat
 
 #### ***[100 %] Milestone D***: Nix build infrastructure for x86_64-linux and aarch64-linux and signed Nix Binary cache
 
-Because Numtide runs a buildbot instance towards GitHub, this Milestone is the main reason why the repository is hosted there.
-
 - [x] AC1: Pull requests and direct branch pushes run all checks exposed by the Nix Flake
 - [x] AC2: CI artifacts can be retrieved via a documented Nix binary cache
 
 ##### Solving AC1: Adding the `buildbot-numtide` repository label and verifying
 
-See the [project page on Numtide's Buildbot instance](https://buildbot.numtide.com/#/projects/37).
+Numtide runs a Buildbot-Nix instance that has been configured to respond to this project's pushes and pull-requests.
+It has connected builders for x86_64-linux and aarch64-linux, and can run VM tests for the former as well.
+
+See the [project page on Numtide's Buildbot instance](https://buildbot.numtide.com/#/projects/37) for a live view on build status for this project.
 
 #### Solving AC2: Adding Binary Cache info to the Nix Flake and README
 
-See [the Nix Binary Cache section in the README](./README.md#nix-binary-cache)
+The Buildbot-Nix instance is set up to sign and upload builds to a publicly available cache.
+
+I added [the Nix Binary Cache section in the README](./README.md#nix-binary-cache) with more context and instructions for end-users and contributors.
 
 ### Epic 3: NixOS VM Integration tests for the PoT code
 
