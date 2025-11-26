@@ -177,7 +177,7 @@ I conclude that the evidence is in support of continuing with this set up and us
 The main binary `flt` has [an `Applet` enumeration](https://github.com/numtide/nix-fleet/blob/0a768d903b2399d24df9334d0950cad540b2e844/rust/app/src/main.rs#L30-L35) for each component.
 There's a subcommand structure for each of them that allows running each component separately.
 
-The [Justfile](./Justfile) has commands to run all components that wrap `cargo run` appropriately and give some sane defaults for development.
+The [Justfile](./Justfile) has commands to run all components that wrap `cargo run` appropriately and contain defaults for a local development setup.
 These recipes can be discovered using `just --list`.
 
 The `rust-workspace` Nix package provides the `flt` binary, so it can be used by the subsequent NixOS VM tests.
