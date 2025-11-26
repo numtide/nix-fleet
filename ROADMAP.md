@@ -169,10 +169,9 @@ I conclude that the evidence is in support of continuing with this set up and us
 
 #### ***[0 %] Milestone I***: Traffic tunneling to NAT'ed nodes for SSH etc.
 
-#### ***[50 %] Milestone J***: Binary set up: unified CLI or separate binaries, or combination?
+#### ***[100 %] Milestone J***: Binary set up: unified CLI or separate binaries, or combination?
 
-- [x] AC1: All components can be started interactively for development purposes.
-- [ ] AC2: Ergonomic CLI args, file and environment configuration options based on insights from the first set of NixOS VM tests.
+- [x] AC1: All components can be started interactively for development purposes and are fit for NixOS VM tests.
 
 ##### Solving AC1: single-binary with subcommands and Justfile for convenience
 The main binary `flt` has [an `Applet` enumeration](https://github.com/numtide/nix-fleet/blob/0a768d903b2399d24df9334d0950cad540b2e844/rust/app/src/main.rs#L30-L35) for each component.
@@ -180,6 +179,8 @@ There's a subcommand structure for each of them that allows running each compone
 
 The [Justfile](./Justfile) has commands to run all components that wrap `cargo run` appropriately and give some sane defaults for development.
 These recipes can be discovered using `just --list`.
+
+The `rust-workspace` Nix package provides the `flt` binary, so it can be used by the subsequent NixOS VM tests.
 
 ### Epic 2: Repository structure, Development Environment, Package Skeletons, Local and CI Testing
 
@@ -212,7 +213,8 @@ It inherits its build- and runtime dependencies from the previously described `r
 
 #### ***[0 %] Milestone B***: Final binary structure for Agent, Coordinator, Admin from PoT code
 
-- [ ] ACx: Hierarchical configuration parser that merges CLI arguments, configuration files and environment variables
+- [ ] AC1: Ergonomic CLI args, file and environment configuration options based on insights from the first set of NixOS VM tests.
+- [ ] AC2: Hierarchical configuration parser that merges CLI arguments, configuration files and environment variables
 
 #### ***[100 %] Milestone C***: Workflows and developer documentation for local and CI testing for Rust and Nix.
 
