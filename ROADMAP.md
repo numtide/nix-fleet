@@ -172,7 +172,7 @@ I conclude that the evidence is in support of continuing with this set up and us
 #### ***[50 %] Milestone J***: Binary set up: unified CLI or separate binaries, or combination?
 
 - [x] AC1: All components can be started interactively for development purposes.
-- [ ] AC2: Ergonomic CLI/file/environment options and based on insights from setting up the NixOS VM tests.
+- [ ] AC2: Ergonomic CLI args, file and environment configuration options based on insights from the first set of NixOS VM tests.
 
 ##### Solving AC1: single-binary with subcommands and Justfile for convenience
 The main binary `flt` has [an `Applet` enumeration](https://github.com/numtide/nix-fleet/blob/0a768d903b2399d24df9334d0950cad540b2e844/rust/app/src/main.rs#L30-L35) for each component.
