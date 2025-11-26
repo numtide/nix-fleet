@@ -206,13 +206,13 @@ Using [crane](https://crane.dev/) for the [rust-workspace package](nix/packages/
 ##### Solving AC2: use crane's `devShell` and inherits its dependencies from the Rust workspace package
 
 The [rust devShell](./nix/devshells/rust.nix) uses the Rust specific [craneLib.devShell](https://crane.dev/API.html#cranelibdevshell). 
-It inherits its build- and runtime dependencies from the previuosly described `rust-workspace` package to avoid duplication and keep it easier to maintain.
+It inherits its build- and runtime dependencies from the previously described `rust-workspace` package to avoid duplication and keep it easier to maintain.
 
 ##### Solving AC3: TODO when the first release is published
 
 #### ***[0 %] Milestone B***: Final binary structure for Agent, Coordinator, Admin from PoT code
 
-- [ ] ACx: Well documented hierarchical configuration to that incorporates CLI arguments, configuration files and environment variables
+- [ ] ACx: Hierarchical configuration parser that merges CLI arguments, configuration files and environment variables
 
 #### ***[100 %] Milestone C***: Workflows and developer documentation for local and CI testing for Rust and Nix.
 
