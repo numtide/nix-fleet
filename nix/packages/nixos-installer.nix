@@ -61,4 +61,7 @@
       }
     )
   ];
-}).config.system.build.isoImage
+}).config.system.build.isoImage.overrideDerivation
+  (_: {
+    meta.platforms = pkgs.lib.platforms.linux ++ pkgs.lib.platforms.darwin;
+  })
