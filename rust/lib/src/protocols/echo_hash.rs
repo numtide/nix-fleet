@@ -91,7 +91,7 @@ pub async fn send(
 
             let router = router_builder.spawn();
 
-            let api_client = EchoHashDocsApi::connect(endpoint.clone(), node_id, blobs, docs)?;
+            let api_client = EchoHashDocsApi::connect(endpoint, node_id, blobs, docs)?;
 
             api_client.send(msg, mode, number, node_id, timeout).await?;
 
@@ -588,27 +588,40 @@ pub mod docs {
                         let (doc, mut stream) = docs.import_and_subscribe(ticket).await?;
 
                         // start syncing and wait until its completion by following the stream
-                        doc.start_sync(vec![remote_id.into()]).await?;
-                        while let Some(event) = stream.next().await {
-                            let event = event?;
+                        loop {
+                            doc.start_sync(vec![remote_id.into()]).await?;
+                            while let Some(event) = stream.next().await {
+                                let event = event?;
 
-                            tracing::debug!("event: {event:?}");
+                                tracing::debug!("event: {event:?}");
 
-                            if let LiveEvent::SyncFinished(..) = event {
-                                break;
+                                if let LiveEvent::SyncFinished(..) = event {
+                                    break;
+                                }
                             }
+
+                            let query = QueryBuilder::<iroh_docs::store::FlatQuery>::default()
+                                .key_exact(V0_KEY)
+                                .build();
+
+                            let entry = match doc
+                                .get_one(query)
+                                .await?
+                                .ok_or_else(|| anyhow::anyhow!("couldn't find {V0_KEY} in docs"))
+                            {
+                                Ok(entry) => entry,
+                                Err(e) => {
+                                    tracing::warn!("couldn't find {V0_KEY} yet: {e}. retrying..");
+                                    tokio::time::sleep(std::time::Duration::from_secs_f64(0.1))
+                                        .await;
+                                    continue;
+                                }
+                            };
+
+                            ensure!(entry == remote_entry, "entry mismatch");
+
+                            break;
                         }
-
-                        let query = QueryBuilder::<iroh_docs::store::FlatQuery>::default()
-                            .key_exact(V0_KEY)
-                            .build();
-
-                        let entry = doc
-                            .get_one(query)
-                            .await?
-                            .ok_or_else(|| anyhow::anyhow!("couldn't find {V0_KEY} in docs"))?;
-
-                        ensure!(entry == remote_entry, "entry mismatch");
 
                         // TODO: has this been enough to prove that B actually _has_ downloaded the content?
 
@@ -927,8 +940,6 @@ pub mod tests {
         .await
         .unwrap();
 
-        let admin_assets = ctx.generate_assets().unwrap();
-        let endpoint = ctx.get_endpoint(&admin_assets.key).await.unwrap();
         /*
          * TODO: ask upstream to figure out why this works nested within ctx.spawn_component as opposed to directly calling `admin::run`
          * notes:
@@ -960,15 +971,23 @@ pub mod tests {
             })
         };
 
+        let admin_assets = ctx.generate_assets().unwrap();
+
         if direct {
-            let (_shutdown_tx, shutdown_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
-            admin_component_fn(ComponentCallbackArgs {
-                secret_key: admin_assets.key,
-                shutdown_rx,
-                // won't be used anyway
-                endpoint,
+            let endpoint = ctx.get_endpoint(&admin_assets.key).await.unwrap();
+            tokio::task::spawn(async move {
+                let (_shutdown_tx, shutdown_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+                let callback_args = ComponentCallbackArgs {
+                    secret_key: admin_assets.key.clone(),
+                    shutdown_rx,
+                    endpoint: endpoint.clone(),
+                };
+                admin_component_fn(callback_args)
+                    .await
+                    .map(|s| Box::new(s) as Box<dyn erased_serde::Serialize + Send>)
             })
             .await
+            .unwrap()
             .unwrap();
         } else {
             ctx.spawn_component(admin_component_fn, Some(admin_assets))
@@ -983,7 +1002,7 @@ pub mod tests {
     #[test_case(SendMode::Rpc, 10, 1024, 1.0, true; "Rpc")]
     #[test_case(SendMode::RpcStream, 10, 1024, 1.0, true; "RpcStream")]
     #[test_case(SendMode::Docs, 10, 1024, 1.0, false; "Docs nested")]
-    #[test_case(SendMode::Docs, 10, 1024, 1.0, true => ignore /* TODO: why does this fail? */; "Docs direct")]
+    #[test_case(SendMode::Docs, 10, 1024, 120.0, true => ignore /* TODO: why does this fail? */; "Docs direct")]
     pub async fn echo_completes_admin_to_coordinator(
         mode: SendMode,
         number: usize,
