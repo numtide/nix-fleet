@@ -9,11 +9,11 @@ let
   inherit (pkgs.stdenv.targetPlatform) system;
   drv =
     (inputs.nixpkgs.lib.nixosSystem {
-      inherit system;
       modules = [
         (
           { modulesPath, ... }:
           {
+            nixpkgs.hostPlatform = if pkgs.stdenv.isLinux then system else null;
 
             imports = [
               inputs.srvos.nixosModules.mixins-nix-experimental
