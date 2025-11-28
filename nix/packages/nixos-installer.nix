@@ -70,4 +70,4 @@ let
       });
 
 in
-if pkgs.lib.meta.availableOn system drv then drv else null
+if pkgs.lib.meta.availableOn system drv then drv else pkgs.emptyFile
