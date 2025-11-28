@@ -37,6 +37,19 @@ run-admin relay_mode="disabled" node_id=COORDINATOR_NODE_ID +args="":    #!/usr/
             \
             {{args}}
 
+run-agent-on-installer:
+    #!/usr/bin/env bash
+    scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o CheckHostIP=no ./fixtures/agent.ed25519 nixos@nixos:/home/nixos/
+    ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o CheckHostIP=no  nixos@nixos sudo \
+        RUST_LOG=flt=trace \
+            flt \
+                --relay-mode=default \
+                --maybe-secret-key=/home/nixos/agent.ed25519 \
+            agent --coordinator={{COORDINATOR_NODE_ID}}
+
+get-agent-facts:
+    just run-admin disabled $(just coordinator-nodeid) enrollment-service get-facts $(just agent-nodeid) | jq .
+
 bench:
     cargo bench --features test
 
