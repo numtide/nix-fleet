@@ -70,4 +70,4 @@ let
       });
 
 in
-if pkgs.lib.meta.availableOn system drv then drv else pkgs.emptyFile
+if pkgs.lib.meta.availableOn system drv then drv else pkgs.runCommand "empty" { } "mkdir $out"
