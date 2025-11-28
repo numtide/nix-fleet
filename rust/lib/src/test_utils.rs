@@ -134,12 +134,12 @@ impl RelayedTestContext {
         })
     }
 
-    pub async fn get_endpoint(&self, assets: &ComponentAssets) -> anyhow::Result<Endpoint> {
+    pub async fn get_endpoint(&self, key: &SecretKey) -> anyhow::Result<Endpoint> {
         let endpoint = get_endpoint(
-            assets.key.clone(),
+            key.clone(),
             self.relay_mode.clone(),
             util::Discoveries::Custom {
-                secret_key: Box::new(assets.key.clone()),
+                secret_key: Box::new(key.clone()),
                 url: self.iroh_dns_http_url.clone().into(),
             },
         )
@@ -185,7 +185,7 @@ impl RelayedTestContext {
 
             let (shutdown_tx, shutdown_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
 
-            let endpoint = self.get_endpoint(&assets).await?;
+            let endpoint = self.get_endpoint(&assets.key).await?;
 
             let callback_args = ComponentCallbackArgs {
                 secret_key: assets.key.clone(),

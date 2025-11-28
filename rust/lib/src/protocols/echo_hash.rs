@@ -928,7 +928,7 @@ pub mod tests {
         .unwrap();
 
         let admin_assets = ctx.generate_assets().unwrap();
-        let endpoint = ctx.get_endpoint(&admin_assets).await.unwrap();
+        let endpoint = ctx.get_endpoint(&admin_assets.key).await.unwrap();
         /*
          * TODO: ask upstream to figure out why this works nested within ctx.spawn_component as opposed to directly calling `admin::run`
          * notes:
