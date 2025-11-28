@@ -9,12 +9,11 @@ let
   inherit (pkgs.stdenv.targetPlatform) system;
   drv =
     (inputs.nixpkgs.lib.nixosSystem {
+      inherit system;
       modules = [
         (
           { modulesPath, ... }:
           {
-            nixpkgs.hostPlatform = if pkgs.stdenv.isLinux then system else null;
-
             imports = [
               inputs.srvos.nixosModules.mixins-nix-experimental
               {
@@ -72,4 +71,4 @@ let
       });
 
 in
-if pkgs.lib.meta.availableOn system drv then drv else pkgs.runCommand "empty" { } "mkdir $out"
+if pkgs.stdenv.isLinux then drv else pkgs.emptyFile
