@@ -6,7 +6,7 @@
 }:
 
 (inputs.nixpkgs.lib.nixosSystem {
-  inherit (pkgs.stdenv.hostPlatform) system;
+  inherit (pkgs.stdenv.targetPlatform) system;
   modules = [
     (
       { modulesPath, ... }:
@@ -61,9 +61,4 @@
       }
     )
   ];
-
-}).config.system.build.isoImage.overrideDerivation
-  (_: {
-    # TODO: allow building this on darwin as well. this is just a shortterm workaround:
-    meta.platforms = pkgs.lib.platforms.linux;
-  })
+})
