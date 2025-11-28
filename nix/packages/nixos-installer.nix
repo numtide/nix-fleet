@@ -65,8 +65,10 @@ let
         )
       ];
     }).config.system.build.isoImage.overrideDerivation
-      (_: {
-        meta.platforms = pkgs.lib.platforms.linux;
+      (attrs: {
+        meta = attrs.meta // {
+          platforms = pkgs.lib.platforms.linux;
+        };
       });
 
 in
