@@ -61,4 +61,4 @@
       }
     )
   ];
-})
+}).config.system.build.isoImage
