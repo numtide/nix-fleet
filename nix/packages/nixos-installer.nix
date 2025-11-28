@@ -6,7 +6,7 @@
 }:
 
 let
-  inherit (pkgs.stdenv.hostPlatform) system;
+  inherit (pkgs.stdenv.targetPlatform) system;
   drv =
     (inputs.nixpkgs.lib.nixosSystem {
       inherit system;
