@@ -54,6 +54,21 @@ pub struct AgentArgs {
 
     #[arg(long)]
     pub maybe_update_facts_loop_interval_seconds: Option<f64>,
+    //
+    // #[arg(long)]
+    // pub host_type: HostTypeDiscriminants,
+
+    // #[arg(long)]
+    // pub host_update: bool,
+}
+
+#[derive(Default, strum::EnumString, strum::Display, strum::EnumDiscriminants)]
+#[strum_discriminants(derive(Default, strum::Display, strum::EnumString))]
+pub enum HostType {
+    #[default]
+    #[strum_discriminants(default)]
+    Ignore,
+    Autodetect,
 }
 
 /// Definition for the top-level Admin command
@@ -107,6 +122,13 @@ pub enum EnrollmentServiceCmd {
     /// Retrieve facts for an agent
     GetFacts {
         node_id: PublicKey,
+    },
+
+    AssignNixosClosure {
+        #[arg(long)]
+        node_id: PublicKey,
+        #[arg(long)]
+        path: PathBuf,
     },
 }
 

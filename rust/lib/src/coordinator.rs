@@ -86,6 +86,9 @@ pub async fn run(
     tracing::debug!("spawned iroh-docs and dependencies.");
 
     let router_builder = Router::builder(endpoint.clone())
+        .accept(iroh_gossip::ALPN, gossip.clone())
+        .accept(iroh_blobs::ALPN, blobs.clone())
+        .accept(iroh_docs::ALPN, docs.clone())
         .accept(EchoHashNative::ALPN, EchoHashNative)
         .accept(EchoHashRpcApi::ALPN, EchoHashRpcApi::spawn().expose()?)
         .accept(

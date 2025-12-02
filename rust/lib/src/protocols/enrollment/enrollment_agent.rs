@@ -1,13 +1,22 @@
 use std::collections::BTreeMap;
+use std::io::Read;
+use std::pin::Pin;
+use std::process::Stdio;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
+use futures_util::stream::Next;
+use futures_util::{FutureExt, Stream, StreamExt, TryFutureExt};
 use iroh::protocol::ProtocolHandler;
 use iroh::{Endpoint, PublicKey, SecretKey};
+use iroh_blobs::api::downloader::Downloader;
+
 use iroh_blobs::BlobsProtocol;
 use iroh_docs::api::Doc;
-use iroh_docs::Author;
+use iroh_docs::engine::LiveEvent;
+use iroh_docs::{Author, DocTicket};
 use irpc::{rpc_requests, Client};
 use linked_hash_set::LinkedHashSet;
 use serde::{Deserialize, Serialize};
@@ -19,8 +28,9 @@ use crate::protocols::enrollment::enrollment_service::{
     EnrollmentServiceClient, SubscribeResponse,
 };
 use crate::protocols::enrollment::{
-    ensure_node_doc_with_derived_keys, DOC_KEY_DERIVE_CONTEXT_NAMESPACE_FACTS_0,
-    DOC_KEY_DERIVE_CONTEXT_NAMESPACE_ROOT_0, DOC_KEY_FACTS_LATEST,
+    ensure_node_doc_with_derived_keys, DocKeyNixosClosureMarker,
+    DOC_KEY_DERIVE_CONTEXT_NAMESPACE_FACTS_0, DOC_KEY_DERIVE_CONTEXT_NAMESPACE_ROOT_0,
+    DOC_KEY_FACTS_LATEST,
 };
 
 pub const ALPN: &[u8] = b"nix-fleet/enrollment/agent/0";
@@ -53,7 +63,9 @@ pub struct EnrollmentServiceSubscription {
 struct EnrollmentAgentActor {
     endpoint: Endpoint,
     blobs: BlobsProtocol,
+    docs: iroh_docs::protocol::Docs,
     default_author: Arc<Author>,
+    downloader: Downloader,
 
     /// Local-only root node document for persistence of settings and state.
     node_doc_root: Arc<TokioMutex<Doc>>,
@@ -72,6 +84,8 @@ impl EnrollmentAgentActor {
 
     const DEFAULT_ENROLLMENT_SERVICE_SUBSCRIPTION_RECONCILE_INTERVAL: f64 = 10.0;
     const DOC_KEY_ENROLLMENT_SERVICE_SUBSCRIPTIONS: &str = "enrollment-actor/subscribed-services";
+    const DOC_KEY_ROOT_DOC_NIXOS_CLOSURES_READ_TICKET: &str =
+        "enrollment-actor/nixos-closures-read-ticket-0";
 
     const DEFAULT_FACTS_UPDATE_INTERVAL: f64 = 60.0;
 
@@ -109,9 +123,12 @@ impl EnrollmentAgentActor {
         )
         .await?;
 
+        let downloader = blobs.downloader(&endpoint);
         let actor = Self {
             endpoint,
             blobs,
+            docs,
+            downloader,
 
             default_author: Arc::new(default_author),
             node_doc_root: Arc::new(TokioMutex::new(node_doc_root)),
@@ -145,26 +162,54 @@ impl EnrollmentAgentActor {
                 facts_serialized,
             )
             .await
-            .context("setting bytes for latest facts doc {DOC_KEY_FACTS_LATEST}")?;
+            .context(format!(
+                "setting bytes for latest facts doc {DOC_KEY_FACTS_LATEST}"
+            ))?;
 
         Ok(())
     }
 
-    async fn coordinator_connection_task_loop(self) -> Result<(), anyhow::Error> {
-        let doc = self.node_doc_root.lock().await;
+    async fn maybe_get_nixos_closures_read_ticket(&self) -> anyhow::Result<Option<DocTicket>> {
+        self.node_doc_root
+            .lock()
+            .await
+            .get_exact(
+                self.default_author.id(),
+                Self::DOC_KEY_ROOT_DOC_NIXOS_CLOSURES_READ_TICKET,
+                false,
+            )
+            .and_then(async |maybe_entry| {
+                if let Some(entry) = maybe_entry {
+                    let ticket = self
+                        .try_from_hash_to_doc_ticket(entry.content_hash())
+                        .await?;
 
+                    Ok(Some(ticket))
+                } else {
+                    Ok(None)
+                }
+            })
+            .await
+    }
+
+    async fn coordinator_enrollment_subscription_task_loop_fn(self) -> Result<(), anyhow::Error> {
         let mut enrollment_service_subscriptions: BTreeMap<
             PublicKey,
             EnrollmentServiceSubscription,
-        > = match doc
+        > = match self
+            .node_doc_root
+            .lock()
+            .await
             .get_exact(
                 self.default_author.id(),
                 Self::DOC_KEY_ENROLLMENT_SERVICE_SUBSCRIPTIONS,
                 true,
             )
             .await
-            .context("error getting {Self::CONNECTED_COORDINATORS}: {e}")?
-        {
+            .context(format!(
+                "error getting {}",
+                Self::DOC_KEY_ENROLLMENT_SERVICE_SUBSCRIPTIONS,
+            ))? {
             Some(entry) => {
                 let value = self.blobs.get_bytes(entry.content_hash()).await?;
 
@@ -215,14 +260,40 @@ impl EnrollmentAgentActor {
                 )
                 .await
             {
-                Ok(SubscribeResponse {}) => {
+                Ok(SubscribeResponse {
+                    nixos_closures_doc_ticket,
+                }) => {
                     let now = chrono::Local::now().to_utc();
                     tracing::debug!("successfully confirmed subscription to {pubkey} on {now}");
 
                     subscription_for_pubkey.last_successful_check = now;
-
                     // TODO(metrics): is there any need to keep the old ones around?
                     subscription_for_pubkey.failed_connections.clear();
+
+                    let must_persist_new_ticket =
+                        match self.maybe_get_nixos_closures_read_ticket().await? {
+                            Some(existing_ticket) => {
+                                // NOTE: DocTicket doesn't implement Eq
+                                existing_ticket.to_string() != nixos_closures_doc_ticket.to_string()
+                            }
+
+                            None => true,
+                        };
+
+                    if must_persist_new_ticket {
+                        tracing::trace!("persisting new ticket {nixos_closures_doc_ticket:?}");
+
+                        // Store the ticket in the node root doc, where the actor loop looks for it.
+                        self.node_doc_root
+                            .lock()
+                            .await
+                            .set_bytes(
+                                self.default_author.id(),
+                                Self::DOC_KEY_ROOT_DOC_NIXOS_CLOSURES_READ_TICKET,
+                                nixos_closures_doc_ticket.to_string().into_bytes(),
+                            )
+                            .await?;
+                    }
                 }
                 Err(e) => {
                     tracing::error!("{e}");
@@ -235,28 +306,33 @@ impl EnrollmentAgentActor {
         //     .retain(|key, _| self.initial_enrollment_services_desired.contains(key));
 
         // persist the updated subscriptions
-        doc.set_bytes(
-            self.default_author.id(),
-            Self::DOC_KEY_ENROLLMENT_SERVICE_SUBSCRIPTIONS,
-            serde_json::to_vec_pretty(&enrollment_service_subscriptions)?,
-        )
-        .await?;
+        self.node_doc_root
+            .lock()
+            .await
+            .set_bytes(
+                self.default_author.id(),
+                Self::DOC_KEY_ENROLLMENT_SERVICE_SUBSCRIPTIONS,
+                serde_json::to_vec_pretty(&enrollment_service_subscriptions)?,
+            )
+            .await?;
 
         Ok(())
     }
 
     async fn run(mut self, mut rx: tokio::sync::mpsc::Receiver<EnrollmentAgentRequestMessage>) {
-        let facts_task = {
+        let facts_update_task = {
+            const TASK_NAME: &str = "facts_update_task";
+
             let self_1 = self.clone();
 
             tokio::task::spawn(async move {
                 loop {
-                    tracing::debug!("starting loop iteration to update facts");
+                    tracing::debug!("[{TASK_NAME}] starting loop iteration");
 
                     if let Err(e) = self_1.clone().facts_update_task_loop().await {
-                        tracing::error!("error in facts update task loop: {e}");
+                        tracing::error!("[{TASK_NAME}] error during loop iteration: {e}");
                     } else {
-                        tracing::debug!("completed loop iteration to update facts");
+                        tracing::debug!("[{TASK_NAME}] completed loop iteration");
                     }
 
                     tokio::time::sleep(self_1.facts_update_interval).await;
@@ -265,20 +341,131 @@ impl EnrollmentAgentActor {
         };
 
         let enrollment_subscription_task = {
+            const TASK_NAME: &str = "enrollment_subscription_task";
+
             let self_1 = self.clone();
 
             tokio::task::spawn(async move {
                 loop {
-                    tracing::debug!("starting loop iteration to maintain desired enrollment service subscriptions");
+                    tracing::debug!("[{TASK_NAME}] starting loop iteration");
 
-                    if let Err(e) = self_1.clone().coordinator_connection_task_loop().await {
-                        tracing::error!("error in enrollment subscription task loop: {e}");
+                    if let Err(e) = self_1
+                        .clone()
+                        .coordinator_enrollment_subscription_task_loop_fn()
+                        .await
+                    {
+                        tracing::error!("[{TASK_NAME}] error during loop iteration: {e}");
                     } else {
-                        tracing::debug!("completed loop iteration to maintain desired enrollment service subscriptions");
+                        tracing::debug!("[{TASK_NAME}] completed loop iteration");
                     }
 
                     tokio::time::sleep(self_1.enrollment_service_subscription_reconcile_interval)
                         .await;
+                }
+            })
+        };
+
+        let (nixos_closure_update_ticket_sender, mut nixos_closure_update_ticket_receiver) =
+            tokio::sync::mpsc::channel::<DocTicket>(10);
+
+        let nixos_closure_update_ticket_task = {
+            const TASK_NAME: &str = "nixos_closure_update_ticket_task";
+
+            let self_1 = self.clone();
+
+            tokio::task::spawn(async move {
+                loop {
+                    tracing::debug!("[{TASK_NAME}] starting loop iteration");
+
+                    if let Err(e) = self_1
+                        .clone()
+                        .coordinator_nixos_closure_update_ticket_task_loop_fn(
+                            &nixos_closure_update_ticket_sender,
+                        )
+                        .await
+                    {
+                        tracing::error!("[{TASK_NAME}] error during loop iteration: {e}");
+                    } else {
+                        tracing::debug!("[{TASK_NAME}] completed loop iteration");
+                    }
+                }
+            })
+        };
+
+        let (nixos_closure_update_executer_sender, mut nixos_closure_update_executer_receiver) =
+            tokio::sync::mpsc::channel::<iroh_docs::Entry>(10);
+
+        // TODO: this task should also dispatch updates that were already received but haven't been applied yet
+        let nixos_closure_update_dispatch_task = {
+            const TASK_NAME: &str = "nixos_closure_update_dispatch_task";
+
+            let self_1 = self.clone();
+
+            tokio::task::spawn(async move {
+                let mut update_live_stream: LiveEventStream = {
+                    let fallback = Box::pin(std::future::pending().into_stream());
+
+                    if let Ok(Some(ticket)) = self_1.maybe_get_nixos_closures_read_ticket().await {
+                        if let Ok((_, stream)) = self_1.docs.import_and_subscribe(ticket).await {
+                            Box::pin(stream)
+                        } else {
+                            fallback
+                        }
+                    } else {
+                        fallback
+                    }
+                };
+
+                loop {
+                    tracing::debug!("[{TASK_NAME}] starting loop iteration");
+
+                    match self_1
+                        .clone()
+                        .coordinator_nixos_closure_update_dispatch_task_loop_fn(
+                            &mut nixos_closure_update_ticket_receiver,
+                            update_live_stream.next(),
+                            &nixos_closure_update_executer_sender,
+                        )
+                        .await
+                    {
+                        Ok(maybe_new_stream) => {
+                            if let Some(new_stream) = maybe_new_stream {
+                                update_live_stream = new_stream;
+                            }
+
+                            tracing::debug!("[{TASK_NAME}] completed loop iteration");
+                        }
+
+                        Err(e) => {
+                            tracing::error!("[{TASK_NAME}] error during loop iteration: {e}");
+                        }
+                    };
+                }
+            })
+        };
+
+        let nixos_closure_update_executer_task = {
+            const TASK_NAME: &str = "nixos_closure_update_executer_task";
+
+            let self_1 = self.clone();
+
+            tokio::task::spawn(async move {
+                loop {
+                    tracing::debug!("[{TASK_NAME}] starting loop iteration");
+
+                    match self_1
+                        .clone()
+                        .coordinator_nixos_closure_update_execute_task_loop_fn(
+                            &mut nixos_closure_update_executer_receiver,
+                        )
+                        .await
+                    {
+                        Ok(()) => {}
+
+                        Err(e) => {
+                            tracing::error!("[{TASK_NAME}] error during loop iteration: {e}");
+                        }
+                    };
                 }
             })
         };
@@ -288,8 +475,12 @@ impl EnrollmentAgentActor {
             self.handle_message(msg).await
         }
 
+        // TODO: send these tasks a message to shutdown
+        facts_update_task.abort();
         enrollment_subscription_task.abort();
-        facts_task.abort();
+        nixos_closure_update_ticket_task.abort();
+        nixos_closure_update_dispatch_task.abort();
+        nixos_closure_update_executer_task.abort();
     }
 
     async fn handle_message(&mut self, msg: EnrollmentAgentRequestMessage) {
@@ -319,7 +510,220 @@ impl EnrollmentAgentActor {
             }
         }
     }
+
+    async fn try_from_hash_to_doc_ticket(
+        &self,
+        hash: iroh_blobs::Hash,
+    ) -> anyhow::Result<DocTicket> {
+        let bytes = self.blobs.get_bytes(hash).await?;
+        let utf8 = String::from_utf8(bytes.into())?;
+        let ticket = DocTicket::from_str(&utf8)?;
+
+        Ok(ticket)
+    }
+
+    // Watches for inserts of new nixos closure read tickets, and sends them over the given sender.
+    // The receiver of this will then renew its subscription to the nixos closure
+    async fn coordinator_nixos_closure_update_ticket_task_loop_fn(
+        &self,
+        ticket_sender: &tokio::sync::mpsc::Sender<iroh_docs::DocTicket>,
+    ) -> anyhow::Result<()> {
+        let mut nixos_closures_ticket_changes_subscription =
+            self.node_doc_root.lock().await.subscribe().await?;
+
+        while let Some(event) = nixos_closures_ticket_changes_subscription.next().await {
+            match event {
+                Ok(iroh_docs::engine::LiveEvent::InsertLocal { entry }) => {
+                    if entry.key() == Self::DOC_KEY_ROOT_DOC_NIXOS_CLOSURES_READ_TICKET.as_bytes() {
+                        tracing::debug!(
+                            "received a nixos closure read ticket update from timestamp {}",
+                            entry.timestamp()
+                        );
+
+                        let ticket = self
+                            .try_from_hash_to_doc_ticket(entry.content_hash())
+                            .await?;
+
+                        ticket_sender.send(ticket).await?;
+                    }
+                }
+
+                other => {
+                    tracing::debug!("ignoring event update from node root doc: {other:?}");
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    // Renews the subscription to the latest nixos closure update entry and schedules the update.
+    async fn coordinator_nixos_closure_update_dispatch_task_loop_fn(
+        &self,
+        ticket_receiver: &mut tokio::sync::mpsc::Receiver<DocTicket>,
+        next_update_event: NextUpdateEvent<'_>,
+        update_executer_sender: &tokio::sync::mpsc::Sender<iroh_docs::Entry>,
+    ) -> anyhow::Result<Option<LiveEventStream>> {
+        let update_event_handler_fn = |event| async {
+            match event {
+                iroh_docs::engine::LiveEvent::InsertRemote {
+                    from,
+                    entry,
+                    content_status,
+                } => {
+                    match DocKeyNixosClosureMarker::from_str(&String::from_utf8_lossy(entry.key()))
+                    {
+                        Ok(DocKeyNixosClosureMarker::Latest) => {
+                            tracing::debug!(
+                                "remote inserted new entry for the latest nixos closure"
+                            );
+
+                            // ensure it's downloaded
+                            let downloader = self
+                                .downloader
+                                .download(vec![entry.content_hash()], vec![from]);
+                            let context_msg =
+                                format!("downloading {} from {}", entry.content_hash(), from);
+                            tracing::debug!("[START] {context_msg}");
+                            downloader.await.context(context_msg.clone())?;
+                            tracing::debug!("[FINISH] {context_msg}");
+
+                            // dispatch the update for execution
+                            update_executer_sender.send(entry.clone()).await?;
+                        }
+                        // TODO: what does an error here mean?
+                        Err(_) => (),
+                    }
+                }
+
+                iroh_docs::engine::LiveEvent::SyncFinished(sync_event) => {
+                    tracing::debug!("TODO: process SyncFinished event {sync_event:?}");
+                }
+                any => {
+                    tracing::debug!("TODO: process event {any}");
+                } // iroh_docs::engine::LiveEvent::InsertLocal { entry } => todo!(),
+                  // iroh_docs::engine::LiveEvent::ContentReady { hash } => todo!(),
+                  // iroh_docs::engine::LiveEvent::PendingContentReady => todo!(),
+                  // iroh_docs::engine::LiveEvent::NeighborUp(public_key) => todo!(),
+                  // iroh_docs::engine::LiveEvent::NeighborDown(public_key) => todo!(),
+            }
+
+            anyhow::Result::<_, anyhow::Error>::Ok(())
+        };
+
+        tokio::select! {
+            maybe_ticket = ticket_receiver.recv() => {
+                let ticket = if let Some(ticket) = maybe_ticket {
+                    ticket
+                } else {
+                    return Ok(None);
+                };
+
+                // This stream has to be passed back to the loop so that it can
+                // persist it and pass the next value in on the next iteration.
+                let (doc, stream) = self
+                    .docs
+                    .import_and_subscribe(ticket.clone())
+                    .await
+                    .context(format!("subscribing to doc ticket {ticket:?}?"))?;
+
+                let _ = doc.start_sync(ticket.nodes.clone()).await.inspect_err(|e| {
+                    tracing::warn!("couldn't start syncing document {} with nodes {:?}: {e}", doc.id(), ticket.nodes);
+                });
+
+                Ok(Some(Box::pin(stream)))
+            },
+
+            update_event = next_update_event => {
+                match update_event {
+                    Some(event) => {
+                        match event {
+                            Ok(event) => {
+                                update_event_handler_fn(event).await?;
+                            },
+                            Err(e) => {
+                                anyhow::bail!("error processing update stream: {e}");
+                            },
+                        }
+
+                    },
+                    None => todo!(),
+                }
+
+                Ok(None)
+            }
+        }
+    }
+
+    async fn coordinator_nixos_closure_update_execute_task_loop_fn(
+        &self,
+        nixos_closure_update_executer_receiver: &mut tokio::sync::mpsc::Receiver<iroh_docs::Entry>,
+    ) -> anyhow::Result<()> {
+        while let Some(entry) = nixos_closure_update_executer_receiver.recv().await {
+            tracing::debug!("processing dispatched update entry: {entry:?}");
+
+            let content_hash = entry.content_hash();
+            let mut content_reader = self.blobs.reader(content_hash);
+
+            // export the content to the nix store
+            let (mut nix_store_cmd_pipe_reader, nix_store_cmd_pipe_writer) = std::io::pipe()?;
+
+            let mut nix_store_cmd = tokio::process::Command::new("nix-store")
+                .arg("--import")
+                .stdout(nix_store_cmd_pipe_writer.try_clone()?)
+                .stderr(nix_store_cmd_pipe_writer)
+                .stdin(Stdio::piped())
+                .spawn()
+                .context("spawning nix-store")?;
+            let mut nix_store_cmd_stdin = nix_store_cmd
+                .stdin
+                .take()
+                .ok_or_else(|| anyhow::anyhow!("could not take stdin from nix-store command"))?;
+
+            let bytes_copied = tokio::io::copy(&mut content_reader, &mut nix_store_cmd_stdin)
+                .await
+                .inspect_err(|e| tracing::error!("copying to nix-store stdin: {e}"));
+
+            // TODO: report the output and status back to the coordinator
+
+            let nix_store_cmd_exit_status = nix_store_cmd
+                .wait()
+                .await
+                .context("waiting for the nix-store command")?;
+            if !nix_store_cmd_exit_status.success() || bytes_copied.is_err() {
+                let mut output = String::new();
+                nix_store_cmd_pipe_reader
+                    .read_to_string(&mut output)
+                    .context("reading nix-store output to string")?;
+                anyhow::bail!(
+                    "nix-store --import failed with status {nix_store_cmd_exit_status:?} and output:\n{output}"
+                );
+            }
+
+            tracing::debug!("copy result: {bytes_copied:?} for update with hash {content_hash}");
+
+            // TODO: ensure switch-to-configuration is present
+            // TODO: make the switch mode configurable
+            // TODO: call switch-to-configuration
+        }
+
+        Ok(())
+    }
 }
+
+type LiveEventStream =
+    Pin<Box<dyn Stream<Item = Result<iroh_docs::engine::LiveEvent, anyhow::Error>> + Send>>;
+
+type NextUpdateEvent<'a> = Next<
+    'a,
+    Pin<
+        Box<
+            dyn futures_util::Stream<Item = Result<LiveEvent, anyhow::Error>>
+                + std::marker::Send
+                + 'static,
+        >,
+    >,
+>;
 
 #[derive(Debug, Clone)]
 pub struct EnrollmentAgentApi {

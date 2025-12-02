@@ -81,6 +81,13 @@ pub async fn run(
 
                     serde_json::to_value(response)?
                 }
+                cli::EnrollmentServiceCmd::AssignNixosClosure { node_id, path } => {
+                    client
+                        .upload_and_assign_nixos_closure(timeout, node_id, path)
+                        .await?;
+
+                    serde_json::to_value(())?
+                }
             }
         }
     };

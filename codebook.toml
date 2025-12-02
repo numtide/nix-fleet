@@ -25,6 +25,7 @@ words = [
     "serde",
     "substituters",
     "substitutor",
+    "updatables",
     "uptime",
     "wip",
 ]
