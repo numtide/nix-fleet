@@ -10,6 +10,7 @@ words = [
     "justfile",
     "linters",
     "lnet",
+    "nar",
     "nat'ed",
     "natively",
     "nextest",

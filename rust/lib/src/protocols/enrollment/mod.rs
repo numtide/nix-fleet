@@ -73,7 +73,10 @@ mod tests {
     use crate::{
         admin::{
             self,
-            cli::{AdminArgs, AdminCmd, AgentArgs, CoordinatorArgs, EnrollmentServiceCmd},
+            cli::{
+                AdminArgs, AdminCmd, AgentArgs, CoordinatorArgs, EnrollmentServiceCmd,
+                PersistenceArgs,
+            },
         },
         facts::Facts,
         protocols::enrollment::enrollment_service::EnrolledServiceSubscribersT,
@@ -251,8 +254,10 @@ mod tests {
             .unwrap();
         let coordinator_persistence_dir_path = coordinator_persistence_dir.path().to_path_buf();
         let coordinator_args = CoordinatorArgs {
-            persistence_mode: admin::cli::PersistenceModeDiscriminants::Filesystem,
-            persistence_dir: coordinator_persistence_dir_path,
+            persistence_args: PersistenceArgs {
+                persistence_mode: admin::cli::PersistenceModeDiscriminants::Filesystem,
+                persistence_dir: coordinator_persistence_dir_path,
+            },
         };
 
         let coordinator_assets = {

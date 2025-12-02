@@ -18,10 +18,19 @@ pub enum PersistenceMode {
 #[derive(Debug, Clone, Args, Default)]
 #[command(version, about)]
 pub struct CoordinatorArgs {
+    #[command(flatten)]
+    pub persistence_args: PersistenceArgs,
+}
+
+/// Definition for the top-level Admin command
+#[derive(Debug, Clone, Args, Default)]
+#[command(version, about)]
+pub struct PersistenceArgs {
     /// Persistence for the local document storage.
     #[arg(long, default_value_t = PersistenceModeDiscriminants::default())]
     pub persistence_mode: PersistenceModeDiscriminants,
 
+    /// Directory in which the data will be persisted.
     #[arg(
         long,
         default_value = ".coordinator_files",
@@ -29,8 +38,8 @@ pub struct CoordinatorArgs {
     )]
     pub persistence_dir: PathBuf,
 }
-impl CoordinatorArgs {
-    pub(crate) fn persistence_mode(&self) -> PersistenceMode {
+impl PersistenceArgs {
+    pub(crate) fn mode(&self) -> PersistenceMode {
         match self.persistence_mode {
             PersistenceModeDiscriminants::Memory => PersistenceMode::Memory,
             PersistenceModeDiscriminants::Filesystem => {
@@ -44,6 +53,9 @@ impl CoordinatorArgs {
 #[derive(Debug, Clone, Args, Default)]
 #[command(version, about)]
 pub struct AgentArgs {
+    #[command(flatten)]
+    pub persistence_args: PersistenceArgs,
+
     /// Pass one or multiple NodeIds that are used as coordinators
     #[arg(long = "coordinator")]
     pub maybe_coordinator: Option<iroh::PublicKey>,

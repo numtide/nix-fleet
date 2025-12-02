@@ -1779,6 +1779,7 @@ dependencies = [
  "test-case",
  "test-log",
  "tokio",
+ "tokio-stream",
  "tokio-util",
  "tracing",
  "url",

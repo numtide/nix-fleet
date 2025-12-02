@@ -158,3 +158,131 @@ pub fn parse_relay_mode(input: &str) -> anyhow::Result<RelayMode> {
 
     Ok(mode)
 }
+
+pub async fn create_blob_store(
+    persistence_mode: &crate::admin::cli::PersistenceMode,
+) -> anyhow::Result<(
+    iroh_docs::engine::ProtectCallbackHandler,
+    iroh_blobs::api::Store,
+)> {
+    let (protect_callback_handler, protect_callback) =
+        iroh_docs::engine::ProtectCallbackHandler::new();
+    let gc_config = Some(iroh_blobs::store::GcConfig {
+        interval: std::time::Duration::from_mins(10),
+        add_protected: Some(protect_callback),
+    });
+
+    let blob_store = match persistence_mode {
+        crate::admin::cli::PersistenceMode::Memory => {
+            let mem_store =
+                iroh_blobs::store::mem::MemStore::new_with_opts(iroh_blobs::store::mem::Options {
+                    gc_config,
+                });
+
+            iroh_blobs::api::Store::from(mem_store)
+        }
+        crate::admin::cli::PersistenceMode::Filesystem(ref path_buf) => {
+            let path_buf = path_buf.join("blob_store");
+            std::fs::DirBuilder::new()
+                .recursive(true)
+                .create(&path_buf)?;
+            let fs_store = iroh_blobs::store::fs::FsStore::load_with_opts(
+                path_buf.join("blob_fs_store.db"),
+                iroh_blobs::store::fs::options::Options {
+                    path: iroh_blobs::store::fs::options::PathOptions::new(&path_buf),
+                    gc: gc_config,
+                    inline: Default::default(),
+                    batch: Default::default(),
+                },
+            )
+            .await
+            .context(format!("creating FsStore at {path_buf:?}"))?;
+
+            iroh_blobs::api::Store::from(fs_store)
+        }
+    };
+
+    Ok((protect_callback_handler, blob_store))
+}
+
+pub(crate) async fn setup_iroh_docs_and_deps(
+    endpoint: &iroh::Endpoint,
+    persistence_mode: &crate::admin::cli::PersistenceMode,
+) -> anyhow::Result<(
+    iroh_blobs::BlobsProtocol,
+    iroh_blobs::api::Store,
+    iroh_gossip::Gossip,
+    iroh_docs::protocol::Docs,
+)> {
+    let (protect_callback_handler, blob_store) =
+        crate::util::create_blob_store(persistence_mode).await?;
+    let blobs = iroh_blobs::BlobsProtocol::new(&blob_store, None);
+    let gossip = iroh_gossip::Gossip::builder().spawn(endpoint.clone());
+    let docs = match persistence_mode {
+        crate::admin::cli::PersistenceMode::Memory => iroh_docs::protocol::Docs::memory(),
+        crate::admin::cli::PersistenceMode::Filesystem(path_buf) => {
+            let path_buf = path_buf.join("docs_store");
+            std::fs::DirBuilder::new()
+                .recursive(true)
+                .create(&path_buf)?;
+
+            iroh_docs::protocol::Docs::persistent(path_buf.clone())
+        }
+    }
+    .protect_handler(protect_callback_handler)
+    .spawn(endpoint.clone(), blob_store.clone(), gossip.clone())
+    .await?;
+    tracing::debug!("spawned iroh-docs and dependencies.");
+
+    Ok((blobs, blob_store, gossip, docs))
+}
+
+#[derive(Debug)]
+pub enum StreamKind {
+    Stdout,
+    Stderr,
+}
+
+/// Returns a stream of interleaved lines from `stdout` and `stderr` with precise timestamps.
+/// The stream yields `(timestamp, kind, line)`.
+/// Order is approximately preserved based on when lines are read asynchronously (close to terminal behavior).
+pub fn merged_output_stream(
+    child: &mut tokio::process::Child,
+) -> anyhow::Result<impl futures_util::Stream<Item = (tokio::time::Instant, StreamKind, String)>> {
+    use tokio::io::AsyncBufReadExt;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("never had stdout"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("never had stderr"))?;
+
+    // Buffer size; adjust as needed
+    let (tx, rx) = tokio::sync::mpsc::channel(128);
+
+    // Spawn task for stdout
+    let value = tx.clone();
+    tokio::spawn(async move {
+        let mut lines = tokio::io::BufReader::new(stdout).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let _ = value
+                .send((tokio::time::Instant::now(), StreamKind::Stdout, line))
+                .await;
+        }
+    });
+
+    // Spawn task for stderr
+    tokio::spawn(async move {
+        let mut lines = tokio::io::BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let _ = tx
+                .send((tokio::time::Instant::now(), StreamKind::Stderr, line))
+                .await;
+        }
+    });
+
+    Ok(tokio_stream::wrappers::ReceiverStream::new(rx))
+}

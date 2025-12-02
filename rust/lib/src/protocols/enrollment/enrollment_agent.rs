@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
-use std::io::Read;
+
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::process::Stdio;
 use std::str::FromStr;
@@ -12,7 +13,6 @@ use futures_util::{FutureExt, Stream, StreamExt, TryFutureExt};
 use iroh::protocol::ProtocolHandler;
 use iroh::{Endpoint, PublicKey, SecretKey};
 use iroh_blobs::api::downloader::Downloader;
-
 use iroh_blobs::BlobsProtocol;
 use iroh_docs::api::Doc;
 use iroh_docs::engine::LiveEvent;
@@ -100,6 +100,7 @@ impl EnrollmentAgentActor {
             maybe_coordinator,
             maybe_subscribe_loop_interval_seconds,
             maybe_update_facts_loop_interval_seconds,
+            persistence_args: _,
         } = agent_args;
 
         let mut enrollment_service_pubkeys: LinkedHashSet<PublicKey> = Default::default();
@@ -192,7 +193,7 @@ impl EnrollmentAgentActor {
             .await
     }
 
-    async fn coordinator_enrollment_subscription_task_loop_fn(self) -> Result<(), anyhow::Error> {
+    async fn coordinator_enrollment_subscription_task_loop_fn(self) -> anyhow::Result<()> {
         let mut enrollment_service_subscriptions: BTreeMap<
             PublicKey,
             EnrollmentServiceSubscription,
@@ -222,6 +223,8 @@ impl EnrollmentAgentActor {
             "restored enrollment service subscriptions: {enrollment_service_subscriptions:?}",
         );
 
+        let mut failed_connection = false;
+
         // Ensure the subscription to all desired services is intact.
         for pubkey in &self.enrollment_services_desired {
             let subscription_for_pubkey =
@@ -233,14 +236,18 @@ impl EnrollmentAgentActor {
                 std::time::Duration::from_secs_f64(Self::DEFAULT_REQUEST_TIMEOUT_SECONDS),
             )
             .await
+            .context(format!("can't connect to remote service at {pubkey}"))
             {
                 Ok(client) => client,
                 Err(e) => {
-                    tracing::error!("can't connect to remote service at {pubkey}: {e}");
+                    tracing::error!("{e}");
+
+                    failed_connection = true;
 
                     subscription_for_pubkey
                         .failed_connections
                         .push((chrono::Local::now().to_utc(), e.to_string()));
+
                     continue;
                 }
             };
@@ -316,6 +323,10 @@ impl EnrollmentAgentActor {
             )
             .await?;
 
+        if failed_connection {
+            anyhow::bail!("got at least one connection failure");
+        }
+
         Ok(())
     }
 
@@ -346,6 +357,7 @@ impl EnrollmentAgentActor {
             let self_1 = self.clone();
 
             tokio::task::spawn(async move {
+                let mut error_count = 0;
                 loop {
                     tracing::debug!("[{TASK_NAME}] starting loop iteration");
 
@@ -354,13 +366,23 @@ impl EnrollmentAgentActor {
                         .coordinator_enrollment_subscription_task_loop_fn()
                         .await
                     {
+                        error_count += 1;
                         tracing::error!("[{TASK_NAME}] error during loop iteration: {e}");
                     } else {
+                        error_count = 0;
                         tracing::debug!("[{TASK_NAME}] completed loop iteration");
-                    }
+                    };
 
-                    tokio::time::sleep(self_1.enrollment_service_subscription_reconcile_interval)
-                        .await;
+                    let sleep_duration = if error_count > 0 {
+                        std::cmp::min(
+                            std::time::Duration::from_secs(2 * error_count),
+                            self_1.enrollment_service_subscription_reconcile_interval,
+                        )
+                    } else {
+                        self_1.enrollment_service_subscription_reconcile_interval
+                    };
+                    tracing::debug!("[{TASK_NAME}]: sleeping for {sleep_duration:?}");
+                    tokio::time::sleep(sleep_duration).await;
                 }
             })
         };
@@ -460,7 +482,9 @@ impl EnrollmentAgentActor {
                         )
                         .await
                     {
-                        Ok(()) => {}
+                        Ok(()) => {
+                            tracing::debug!("[{TASK_NAME}] success in loop iteration");
+                        }
 
                         Err(e) => {
                             tracing::error!("[{TASK_NAME}] error during loop iteration: {e}");
@@ -578,15 +602,33 @@ impl EnrollmentAgentActor {
                                 "remote inserted new entry for the latest nixos closure"
                             );
 
-                            // ensure it's downloaded
-                            let downloader = self
-                                .downloader
-                                .download(vec![entry.content_hash()], vec![from]);
-                            let context_msg =
-                                format!("downloading {} from {}", entry.content_hash(), from);
-                            tracing::debug!("[START] {context_msg}");
-                            downloader.await.context(context_msg.clone())?;
-                            tracing::debug!("[FINISH] {context_msg}");
+                            match content_status {
+                                iroh_docs::ContentStatus::Complete => (),
+                                iroh_docs::ContentStatus::Incomplete
+                                | iroh_docs::ContentStatus::Missing => {
+                                    // try to download it
+
+                                    /*
+                                     * TODO:
+                                     * spawn this in the background? also think
+                                     * about what happens if a newer closure is
+                                     * pushed meanwhile. this should then
+                                     * probably be aborted.
+                                     */
+
+                                    let downloader = self
+                                        .downloader
+                                        .download(vec![entry.content_hash()], vec![from]);
+                                    let context_msg = format!(
+                                        "downloading {} from {}",
+                                        entry.content_hash(),
+                                        from
+                                    );
+                                    tracing::debug!("[START] {context_msg}");
+                                    downloader.await.context(context_msg.clone())?;
+                                    tracing::debug!("[FINISH] {context_msg}");
+                                }
+                            }
 
                             // dispatch the update for execution
                             update_executer_sender.send(entry.clone()).await?;
@@ -663,48 +705,155 @@ impl EnrollmentAgentActor {
             tracing::debug!("processing dispatched update entry: {entry:?}");
 
             let content_hash = entry.content_hash();
-            let mut content_reader = self.blobs.reader(content_hash);
 
             // export the content to the nix store
-            let (mut nix_store_cmd_pipe_reader, nix_store_cmd_pipe_writer) = std::io::pipe()?;
-
-            let mut nix_store_cmd = tokio::process::Command::new("nix-store")
-                .arg("--import")
-                .stdout(nix_store_cmd_pipe_writer.try_clone()?)
-                .stderr(nix_store_cmd_pipe_writer)
+            let mut cmd = tokio::process::Command::new("sudo");
+            let cmd = cmd
+                .arg("nix-store")
+                .args(["-vvv", "--import"])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
                 .stdin(Stdio::piped())
-                .spawn()
-                .context("spawning nix-store")?;
-            let mut nix_store_cmd_stdin = nix_store_cmd
+                .kill_on_drop(true);
+            tracing::debug!("[Command] spawning: {cmd:?}");
+
+            let mut cmd_child = cmd.spawn().context("spawning nix-store")?;
+            let mut nix_store_cmd_stdin = cmd_child
                 .stdin
                 .take()
                 .ok_or_else(|| anyhow::anyhow!("could not take stdin from nix-store command"))?;
 
-            let bytes_copied = tokio::io::copy(&mut content_reader, &mut nix_store_cmd_stdin)
-                .await
-                .inspect_err(|e| tracing::error!("copying to nix-store stdin: {e}"));
+            let output_stream = crate::util::merged_output_stream(&mut cmd_child)?;
 
-            // TODO: report the output and status back to the coordinator
+            let cmd_output_reader_handle = tokio::task::spawn_blocking(async move || {
+                tracing::debug!("parsing output");
 
-            let nix_store_cmd_exit_status = nix_store_cmd
-                .wait()
+                // Collect everything, then sort by timestamp
+                let mut events: Vec<_> = output_stream
+                    .inspect(|item| {
+                        tracing::debug!("{item:?}");
+                    })
+                    .collect()
+                    .await;
+
+                // Sort by timestamp (stable sort preserves relative order for equal times)
+                events.sort_by_key(|(ts, _, _)| *ts);
+
+                events
+            });
+
+            let cmd_child_handle = tokio::task::spawn(async move {
+                let msg = "waiting for the nix-store in a spawned task";
+                tracing::debug!(msg);
+                cmd_child.wait().await.context(msg)
+            });
+
+            {
+                let mut content_reader = self.blobs.reader(content_hash);
+
+                let msg = format!(
+                    "copying bytes from content with hash {content_hash} to nix-store's stdin"
+                );
+
+                tokio::io::copy(&mut content_reader, &mut nix_store_cmd_stdin)
+                    .await
+                    .inspect(|r| tracing::debug!("finished {msg}: {r}"))
+                    .context(msg)?;
+            };
+
+            let cmd_exit_status = cmd_child_handle
                 .await
-                .context("waiting for the nix-store command")?;
-            if !nix_store_cmd_exit_status.success() || bytes_copied.is_err() {
-                let mut output = String::new();
-                nix_store_cmd_pipe_reader
-                    .read_to_string(&mut output)
-                    .context("reading nix-store output to string")?;
-                anyhow::bail!(
-                    "nix-store --import failed with status {nix_store_cmd_exit_status:?} and output:\n{output}"
+                .inspect(|r| tracing::debug!("nix-store command finished with {r:?}"))
+                .context("joining nix-store task")?;
+
+            let mut cmd_output = cmd_output_reader_handle.await?.await;
+            // the nixos closure is most likely the last item
+            cmd_output.reverse();
+
+            if cmd_exit_status.is_err() {
+                tracing::error!(
+                    "nix-store --import failed with status {cmd_exit_status:?} and output:\n{cmd_output:?}"
                 );
             }
 
-            tracing::debug!("copy result: {bytes_copied:?} for update with hash {content_hash}");
+            // TODO: make this configurable
+            const NIX_STORE_PREFIX: &str = "/nix/store";
+            const STC_PATH: &str = "bin/switch-to-configuration";
+            let needed_paths_in_nixos_closure = std::collections::HashSet::from([
+                STC_PATH,
+                // TODO: adapt the dummy closures to also provide these
+                // "activate",
+                // "system",
+            ]);
 
-            // TODO: ensure switch-to-configuration is present
+            let (_, switch_to_configuration_path) = cmd_output
+                .iter()
+                .inspect(|(_, _, r)| {
+                    tracing::trace!("checking for the existence of nixos closure files in {r}");
+                })
+                .find_map(|(_, kind, line)| {
+                    if let crate::util::StreamKind::Stdout = kind {
+                        let line_path: PathBuf = line.into();
+
+                        if line_path.starts_with(NIX_STORE_PREFIX)
+                            && needed_paths_in_nixos_closure
+                                .iter()
+                                .map(|p| line_path.join(p))
+                                .all(|p| p.exists())
+                        {
+                            tracing::debug!("found nixos closure at {line_path:?}");
+                            return Some((line_path.clone(), line_path.join(STC_PATH)));
+                        }
+                    }
+
+                    None
+                })
+                .ok_or_else(|| anyhow::anyhow!("no nixos closure found in {cmd_output:?}"))?;
+
             // TODO: make the switch mode configurable
-            // TODO: call switch-to-configuration
+            let switch_mode = "switch";
+
+            // TODO: call switch-to-configuration in a context outside of the agent, otherwise it could be terminated by the switch itself.
+            let mut cmd = tokio::process::Command::new(&switch_to_configuration_path);
+            let cmd = cmd
+                .arg(switch_mode)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true);
+            tracing::debug!("[Command] spawning: {cmd:?}");
+
+            let cmd_child = cmd
+                .spawn()
+                .context(format!("spawning {switch_to_configuration_path:?}"))
+                .map(|cmd_child| {
+                    let switch_to_configuration_path = switch_to_configuration_path.clone();
+                    async move {
+                        cmd_child.wait_with_output().await.context(format!(
+                            "waiting for the {switch_to_configuration_path:?} command"
+                        ))
+                    }
+                });
+
+            match cmd_child {
+                Ok(child) => match child.await {
+                    Ok(output) => {
+                        let exit_status = output.status;
+                        if !output.status.success() {
+                            Err(anyhow::anyhow!(
+                                "{cmd:?} failed with status {exit_status} and output:\n{output:#?}"
+                            ))
+                        } else {
+                            Ok(cmd_output)
+                        }
+                    }
+                    Err(e) => Err(e),
+                },
+                Err(e) => Err(anyhow::anyhow!("error: {e} (kind = {e:?}")),
+            }?;
+
+            tracing::debug!("successfully processed {entry:?}");
+
+            // TODO: persist update status / mark the update as applied
         }
 
         Ok(())

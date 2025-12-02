@@ -435,7 +435,7 @@ impl EnrollmentServiceActor {
                 doc
             };
 
-        // Use the nixos closure doc itself to store the ticket
+        // Use the NixOS closure doc itself to store the ticket
         let ticket: DocTicket = match nixos_closures_doc_requested_node
             .get_exact(
                 self.default_author.id(),
@@ -693,23 +693,22 @@ impl EnrollmentServiceClient {
         };
 
         let rx = {
-            // scope the streaming and rely on the implicit drop to send EOF
+            // Scope the streaming and rely on the implicit drop to send EOF
 
-            let (tx, rx) = self
-                .client
-                .client_streaming(UploadAndAssignNixOSClosureInner { node_id }, 10)
-                .await?;
+            let (tx, rx) = tokio::time::timeout(
+                timeout,
+                self.client
+                    .client_streaming(UploadAndAssignNixOSClosureInner { node_id }, 10),
+            )
+            .await??;
 
             // Required adaptation from the channel sender to a viable Sink for tokio::io::copy
             let tx_copy_to_bytes = tokio_util::io::CopyToBytes::new(tx.into_sink()); // Buffers slices → Bytes for irpc
             let tx_sink_writer = tokio_util::io::SinkWriter::new(tx_copy_to_bytes);
             tokio::pin!(tx_sink_writer);
 
-            let bytes_copied = tokio::time::timeout(
-                timeout,
-                tokio::io::copy(&mut nix_store_paths_export_stream, &mut tx_sink_writer),
-            )
-            .await??;
+            let bytes_copied =
+                tokio::io::copy(&mut nix_store_paths_export_stream, &mut tx_sink_writer).await?;
             tracing::debug!("copied {bytes_copied} bytes to the remote");
 
             tx_sink_writer.flush().await?;

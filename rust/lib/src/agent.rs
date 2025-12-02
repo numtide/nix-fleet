@@ -2,7 +2,6 @@ use iroh::{
     protocol::{DynProtocolHandler, Router},
     SecretKey,
 };
-use iroh_docs::engine::ProtectCallbackHandler;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::info;
 
@@ -19,24 +18,13 @@ pub async fn run(
     info!("node_id: {node_id} listening on {bind_info:?}");
 
     // Enable iroh-docs and its dependencies
-    let (protect_callback_handler, protect_callback) = ProtectCallbackHandler::new();
-    let blob_store =
-        iroh_blobs::store::mem::MemStore::new_with_opts(iroh_blobs::store::mem::Options {
-            gc_config: Some(iroh_blobs::store::GcConfig {
-                interval: std::time::Duration::from_mins(10),
-                add_protected: Some(protect_callback),
-            }),
-        });
-    let blobs = iroh_blobs::BlobsProtocol::new(&blob_store, None);
-    let gossip = iroh_gossip::Gossip::builder().spawn(endpoint.clone());
-    let docs = iroh_docs::protocol::Docs::memory()
-        .protect_handler(protect_callback_handler)
-        .spawn(endpoint.clone(), (*blob_store).clone(), gossip.clone())
-        .await?;
+    let (blobs, blob_store, gossip, docs) =
+        crate::util::setup_iroh_docs_and_deps(&endpoint, &agent_args.persistence_args.mode())
+            .await?;
 
     let router_builder = Router::builder(endpoint.clone())
-        .accept(iroh_blobs::ALPN, blobs.clone())
         .accept(iroh_gossip::ALPN, gossip.clone())
+        .accept(iroh_blobs::ALPN, blobs.clone())
         .accept(iroh_docs::ALPN, docs.clone())
         .accept(
             enrollment_agent::ALPN,

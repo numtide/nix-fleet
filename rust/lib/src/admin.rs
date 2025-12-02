@@ -16,6 +16,8 @@ pub async fn run(
 
     let timeout = std::time::Duration::from_secs_f64(timeout);
 
+    tracing::debug!("processing {cmd:?}");
+
     let json_value = match cmd {
         cli::AdminCmd::EchoHash { args } => {
             serde_json::to_value(crate::protocols::echo_hash::send(endpoint, args).await?)?
