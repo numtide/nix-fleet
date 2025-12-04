@@ -33,7 +33,6 @@ pub struct PersistenceArgs {
     /// Directory in which the data will be persisted.
     #[arg(
         long,
-        default_value = ".coordinator_files",
         required_if_eq("persistence_mode", "filesystem")
     )]
     pub persistence_dir: PathBuf,
