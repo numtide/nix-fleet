@@ -82,11 +82,11 @@ Rust users will most likely be familiar with the vanilla `cargo test` command.
 In addition the development shell also comes with [cargo-nextest][] which can be used with `cargo nextest run`. The latter is used on CI in a Nix build context so using this locally comes closer to what is used on CI. With a notable exception being that CI doesn't have access to the internet during test runtime.
 
 ### Nix Binary Cache
-The CI publishes its build outputs to [a public HTTP binary cache instance][cachix-numtide].
+The CI publishes its build outputs to a public HTTP binary cache instance.
 
 Configuring your local Nix to use it can speed deployment as well as some actions in local development by downloading pre-built dependencies.
 
-The substitutor URL is `https://numtide.cachix.org` and the public key is `numtide.cachix.org-1:2ps1kLBUWjxIneOy1Ik6cQjb41X0iXVXeHigGmycPPE=`.
+The substitutor URL is `https://cache.numtide.com` and the public key is `niks3.numtide.com-1:DTx8wZduET09hRmMtKdQDxNNthLQETkc/yaX7M4qK0g=`.
 
 The cache has also been specified in the [flake.nix](flake.nix)' `nixConfig` attribute for the sake of communication. The practical effects of this apply only if you run `nix` as a [trusted user](https://nix.dev/manual/nix/2.32/command-ref/conf-file.html#conf-trusted-users), which has considerable security risks and is not recommended. Please carefully read the warning in the linked documentation for more context.
 
@@ -102,10 +102,10 @@ If you're on NixOS, you can use the following snippet in your configuration acco
   nix = {
     settings = {
       substituters = [
-        "https://numtide.cachix.org"
+        "https://cache.numtide.com"
       ];
       trusted-public-keys = [
-        "numtide.cachix.org-1:2ps1kLBUWjxIneOy1Ik6cQjb41X0iXVXeHigGmycPPE="
+        "niks3.numtide.com-1:DTx8wZduET09hRmMtKdQDxNNthLQETkc/yaX7M4qK0g="
       ];
     };
   };
@@ -117,13 +117,11 @@ If you're on NixOS, you can use the following snippet in your configuration acco
 Otherwise, of if you choose to configure the cache outside of the NixOS configuration, the system's Nix configuration at `/etc/nix/nix.conf` can be extended with the following:
 
 ```ini
-extra-substituters = https://numtide.cachix.org
-extra-trusted-public-keys = numtide.cachix.org-1:2ps1kLBUWjxIneOy1Ik6cQjb41X0iXVXeHigGmycPPE=
+extra-substituters = https://cache.numtide.com
+extra-trusted-public-keys = niks3.numtide.com-1:DTx8wZduET09hRmMtKdQDxNNthLQETkc/yaX7M4qK0g=
 ```
 
 There is some more guidance on this in the [nix.dev binary cache recipe](https://nix.dev/guides/recipes/add-binary-cache.html).
-
-You could also use the Cachix CLI to configure the binary cache as described [at the cache site][cachix-numtide] itself.
 
 ### Repository Layout
 
@@ -173,7 +171,6 @@ This project [is currently funded][nlnet-grant-1] through [NGI Fediversity Fund]
 ---
 
 [NITS]: https://github.com/numtide/nits
-[cachix-numtide]: https://app.cachix.org/cache/numtide
 [nix]: https://nix.dev/manual/nix/2.32/
 [nix-install]: https://nixos.org/download/#download-nix
 [cargo-nextest]: https://nexte.st/
