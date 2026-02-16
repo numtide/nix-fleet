@@ -31,10 +31,7 @@ pub struct PersistenceArgs {
     pub persistence_mode: PersistenceModeDiscriminants,
 
     /// Directory in which the data will be persisted.
-    #[arg(
-        long,
-        required_if_eq("persistence_mode", "filesystem")
-    )]
+    #[arg(long, required_if_eq("persistence_mode", "filesystem"))]
     pub persistence_dir: PathBuf,
 }
 impl PersistenceArgs {
