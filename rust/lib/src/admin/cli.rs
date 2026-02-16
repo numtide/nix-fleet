@@ -18,19 +18,24 @@ pub enum PersistenceMode {
 #[derive(Debug, Clone, Args, Default)]
 #[command(version, about)]
 pub struct CoordinatorArgs {
+    #[command(flatten)]
+    pub persistence_args: PersistenceArgs,
+}
+
+/// Definition for the top-level Admin command
+#[derive(Debug, Clone, Args, Default)]
+#[command(version, about)]
+pub struct PersistenceArgs {
     /// Persistence for the local document storage.
     #[arg(long, default_value_t = PersistenceModeDiscriminants::default())]
     pub persistence_mode: PersistenceModeDiscriminants,
 
-    #[arg(
-        long,
-        default_value = ".coordinator_files",
-        required_if_eq("persistence_mode", "filesystem")
-    )]
+    /// Directory in which the data will be persisted.
+    #[arg(long, required_if_eq("persistence_mode", "filesystem"))]
     pub persistence_dir: PathBuf,
 }
-impl CoordinatorArgs {
-    pub(crate) fn persistence_mode(&self) -> PersistenceMode {
+impl PersistenceArgs {
+    pub(crate) fn mode(&self) -> PersistenceMode {
         match self.persistence_mode {
             PersistenceModeDiscriminants::Memory => PersistenceMode::Memory,
             PersistenceModeDiscriminants::Filesystem => {
@@ -44,6 +49,9 @@ impl CoordinatorArgs {
 #[derive(Debug, Clone, Args, Default)]
 #[command(version, about)]
 pub struct AgentArgs {
+    #[command(flatten)]
+    pub persistence_args: PersistenceArgs,
+
     /// Pass one or multiple NodeIds that are used as coordinators
     #[arg(long = "coordinator")]
     pub maybe_coordinator: Option<iroh::PublicKey>,
@@ -54,6 +62,21 @@ pub struct AgentArgs {
 
     #[arg(long)]
     pub maybe_update_facts_loop_interval_seconds: Option<f64>,
+    //
+    // #[arg(long)]
+    // pub host_type: HostTypeDiscriminants,
+
+    // #[arg(long)]
+    // pub host_update: bool,
+}
+
+#[derive(Default, strum::EnumString, strum::Display, strum::EnumDiscriminants)]
+#[strum_discriminants(derive(Default, strum::Display, strum::EnumString))]
+pub enum HostType {
+    #[default]
+    #[strum_discriminants(default)]
+    Ignore,
+    Autodetect,
 }
 
 /// Definition for the top-level Admin command
@@ -107,6 +130,13 @@ pub enum EnrollmentServiceCmd {
     /// Retrieve facts for an agent
     GetFacts {
         node_id: PublicKey,
+    },
+
+    AssignNixosClosure {
+        #[arg(long)]
+        node_id: PublicKey,
+        #[arg(long)]
+        path: PathBuf,
     },
 }
 

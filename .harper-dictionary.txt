@@ -6,7 +6,9 @@ Comin
 Ctrl
 FIXME
 Fediversity
+GC
 MiB
+NAR
 NAT'ed
 NATS
 NGI

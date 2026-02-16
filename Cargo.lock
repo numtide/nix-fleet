@@ -1744,6 +1744,7 @@ name = "flt_lib"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "better-commands",
  "blake3",
  "bytes",
@@ -1778,6 +1779,8 @@ dependencies = [
  "test-case",
  "test-log",
  "tokio",
+ "tokio-stream",
+ "tokio-util",
  "tracing",
  "url",
 ]

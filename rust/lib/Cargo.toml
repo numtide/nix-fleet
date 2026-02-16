@@ -44,6 +44,9 @@ linked-hash-map = { version = "0.5.6", features = ["serde", "serde_impl"] }
 linked_hash_set = { version = "0.1.6", features = ["serde"] }
 strum = { version = "0.27.2", features = ["derive", "strum_macros"] }
 erased-serde = "0.4.9"
+async-trait = "0.1.89"
+tokio-util = { version = "0.7.17", features = ["io"] }
+tokio-stream = { version = "0.1.17", features = ["io-util"] }
 
 [dev-dependencies]
 flt_lib = { path = ".", features = ["test"]}

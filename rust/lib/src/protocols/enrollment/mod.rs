@@ -1,5 +1,6 @@
 use anyhow::Context;
 use blake3::derive_key;
+use iroh::PublicKey;
 use iroh_docs::api::Doc;
 use iroh_docs::{Author, Capability, NamespaceSecret};
 use serde::{Deserialize, Serialize};
@@ -25,6 +26,19 @@ const DOC_KEY_DERIVE_CONTEXT_NAMESPACE_FACTS_0: &str = "enrollment-namespace-fac
 
 pub const DOC_KEY_FACTS_FIRST: &str = "enrollment-actor/facts/first";
 pub const DOC_KEY_FACTS_LATEST: &str = "enrollment-actor/facts/latest";
+
+const DOC_KEY_NIXOS_CLOSURE_TMPL: &str = "enrollment/{node_id}/nixos-closure/{anchor}";
+
+#[derive(strum::EnumString, strum::AsRefStr, strum::Display)]
+pub enum DocKeyNixosClosureMarker {
+    Latest,
+}
+
+pub fn doc_key_nixos_closure(node_id: PublicKey, marker: DocKeyNixosClosureMarker) -> String {
+    DOC_KEY_NIXOS_CLOSURE_TMPL
+        .replace("{node_id}", &node_id.to_string())
+        .replace("{marker}", marker.as_ref())
+}
 
 async fn ensure_node_doc_with_derived_keys(
     docs: &iroh_docs::protocol::Docs,
@@ -59,7 +73,10 @@ mod tests {
     use crate::{
         admin::{
             self,
-            cli::{AdminArgs, AdminCmd, AgentArgs, CoordinatorArgs, EnrollmentServiceCmd},
+            cli::{
+                AdminArgs, AdminCmd, AgentArgs, CoordinatorArgs, EnrollmentServiceCmd,
+                PersistenceArgs,
+            },
         },
         facts::Facts,
         protocols::enrollment::enrollment_service::EnrolledServiceSubscribersT,
@@ -237,8 +254,10 @@ mod tests {
             .unwrap();
         let coordinator_persistence_dir_path = coordinator_persistence_dir.path().to_path_buf();
         let coordinator_args = CoordinatorArgs {
-            persistence_mode: admin::cli::PersistenceModeDiscriminants::Filesystem,
-            persistence_dir: coordinator_persistence_dir_path,
+            persistence_args: PersistenceArgs {
+                persistence_mode: admin::cli::PersistenceModeDiscriminants::Filesystem,
+                persistence_dir: coordinator_persistence_dir_path,
+            },
         };
 
         let coordinator_assets = {

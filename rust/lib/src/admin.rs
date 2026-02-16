@@ -16,6 +16,8 @@ pub async fn run(
 
     let timeout = std::time::Duration::from_secs_f64(timeout);
 
+    tracing::debug!("processing {cmd:?}");
+
     let json_value = match cmd {
         cli::AdminCmd::EchoHash { args } => {
             serde_json::to_value(crate::protocols::echo_hash::send(endpoint, args).await?)?
@@ -80,6 +82,13 @@ pub async fn run(
                     let response = client.get_subscriber_facts(timeout, node_id).await?;
 
                     serde_json::to_value(response)?
+                }
+                cli::EnrollmentServiceCmd::AssignNixosClosure { node_id, path } => {
+                    client
+                        .upload_and_assign_nixos_closure(timeout, node_id, path)
+                        .await?;
+
+                    serde_json::to_value(())?
                 }
             }
         }
